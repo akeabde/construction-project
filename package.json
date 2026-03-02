@@ -1,5 +1,5 @@
 {
-  "name": "buildmart-workspace",
+  "name": "fikhi-construction-workspace",
   "private": true,
   "scripts": {
     "dev:server": "npm run dev --prefix server",
