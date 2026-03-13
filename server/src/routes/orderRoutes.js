@@ -11,45 +11,11 @@ const router = express.Router();
 // Nettoyer une valeur texte.
 const cleanText = (value) => String(value || "").trim();
 
+// Verifier une quantite d item.
+const isValidQuantity = (value) => Number.isInteger(value) && value > 0;
+
 // Statuts que l admin peut choisir (sans "in_progress" qui est automatique au debut).
 const ADMIN_ORDER_STATUSES = ORDER_STATUSES.slice(1);
-
-// Construire les lignes de commande a partir des produits trouves.
-const buildOrderItems = (validItems, products) => {
-  const orderItems = [];
-
-  // Boucle simple: chaque item du panier.
-  for (const item of validItems) {
-    // Chercher le produit correspondant.
-    let product = null;
-    for (const oneProduct of products) {
-      if (String(oneProduct._id) === item.productId) {
-        product = oneProduct;
-        break;
-      }
-    }
-
-    // Si produit non trouve, on ignore la ligne.
-    if (!product) {
-      continue;
-    }
-
-    // Calcul total de la ligne.
-    const lineTotal = product.price * item.quantity;
-
-    // Sauvegarder un "snapshot" des infos produit.
-    orderItems.push({
-      product: product._id,
-      title: product.title,
-      imageUrl: product.imageUrl,
-      price: product.price,
-      quantity: item.quantity,
-      lineTotal,
-    });
-  }
-
-  return orderItems;
-};
 
 // Calculer total global de commande.
 const calculateTotalAmount = (orderItems) => {
@@ -87,8 +53,8 @@ router.post("/", checkAuth, async (req, res) => {
       const productId = cleanText(item.productId);
       const quantity = Number(item.quantity || 1);
 
-      // Un item est valide si productId Mongo valide + quantity > 0.
-      if (mongoose.Types.ObjectId.isValid(productId) && quantity > 0) {
+      // Un item est valide si productId Mongo valide + quantity entier > 0.
+      if (mongoose.Types.ObjectId.isValid(productId) && isValidQuantity(quantity)) {
         validItems.push({ productId, quantity });
       }
     }
@@ -104,8 +70,31 @@ router.post("/", checkAuth, async (req, res) => {
     }
     const products = await Product.find({ _id: { $in: productIds } });
 
-    // 5) Construire les lignes de commande.
-    const orderItems = buildOrderItems(validItems, products);
+    // 5) Construire les lignes de commande + verifier stock.
+    const productById = new Map(products.map((product) => [String(product._id), product]));
+    const orderItems = [];
+
+    for (const item of validItems) {
+      const product = productById.get(item.productId);
+      if (!product) {
+        continue;
+      }
+
+      if (product.stock < item.quantity) {
+        return res.status(400).json({ message: `Stock insuffisant pour ${product.title}` });
+      }
+
+      const lineTotal = product.price * item.quantity;
+      orderItems.push({
+        product: product._id,
+        title: product.title,
+        imageUrl: product.imageUrl,
+        price: product.price,
+        quantity: item.quantity,
+        lineTotal,
+      });
+    }
+
     if (orderItems.length === 0) {
       return res.status(400).json({ message: "No matching products found for order items" });
     }
@@ -124,6 +113,17 @@ router.post("/", checkAuth, async (req, res) => {
       address,
       notes,
     });
+
+    // 8) Mettre a jour le stock (simple decrement).
+    const stockUpdates = orderItems.map((item) => ({
+      updateOne: {
+        filter: { _id: item.product },
+        update: { $inc: { stock: -item.quantity } },
+      },
+    }));
+    if (stockUpdates.length > 0) {
+      await Product.bulkWrite(stockUpdates);
+    }
 
     return res.status(201).json(order);
   } catch (error) {

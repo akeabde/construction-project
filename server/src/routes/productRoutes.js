@@ -8,6 +8,16 @@ const router = express.Router();
 // Nettoyer une valeur texte (eviter null/undefined + espaces).
 const cleanText = (value) => String(value || "").trim();
 
+// Verifier qu une valeur est vraiment fournie (pour update partielle).
+const isValueProvided = (value) => value !== undefined && value !== null && String(value).trim() !== "";
+
+// Lire un boolean qui peut venir comme string.
+const readBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return Boolean(value);
+};
+
 // Nettoyer la liste des caracteristiques (specs) produit.
 const readSpecs = (rawSpecs) => {
   // Si ce n est pas un tableau, on retourne une liste vide.
@@ -40,6 +50,46 @@ const readProductPayload = (body) => {
     featured: Boolean(body.featured),
     specs: readSpecs(body.specs),
   };
+};
+
+// Lire les champs produit pour un update (garder valeurs existantes si absentes).
+const readProductUpdatePayload = (body, existing) => {
+  const title = cleanText(body.title);
+  const description = cleanText(body.description);
+  const imageUrl = cleanText(body.imageUrl);
+  const category = cleanText(body.category);
+  const price = Number(body.price);
+
+  const payload = {
+    title: title || existing.title,
+    description: description || existing.description,
+    price: Number.isNaN(price) ? existing.price : price,
+    imageUrl: imageUrl || existing.imageUrl,
+    category: category || existing.category,
+    stock: existing.stock,
+    unit: existing.unit,
+    featured: existing.featured,
+    specs: existing.specs,
+  };
+
+  if (isValueProvided(body.stock)) {
+    const stock = Number(body.stock);
+    payload.stock = Number.isNaN(stock) ? existing.stock : stock;
+  }
+
+  if (isValueProvided(body.unit)) {
+    payload.unit = cleanText(body.unit);
+  }
+
+  if (body.featured !== undefined && body.featured !== null) {
+    payload.featured = readBoolean(body.featured);
+  }
+
+  if (Array.isArray(body.specs)) {
+    payload.specs = readSpecs(body.specs);
+  }
+
+  return payload;
 };
 
 // Verifier les champs obligatoires avant create/update.
@@ -132,8 +182,14 @@ router.post("/", checkAuth, checkAdmin, async (req, res) => {
 // Mettre a jour un produit (admin uniquement).
 router.put("/:id", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // Lire et nettoyer les champs.
-    const payload = readProductPayload(req.body);
+    // Charger le produit existant.
+    const existingProduct = await Product.findById(req.params.id);
+    if (!existingProduct) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    // Lire et nettoyer les champs (sans ecraser les valeurs existantes).
+    const payload = readProductUpdatePayload(req.body, existingProduct);
 
     // Verifier champs obligatoires.
     if (!isProductPayloadValid(payload)) {
@@ -145,10 +201,6 @@ router.put("/:id", checkAuth, checkAdmin, async (req, res) => {
       new: true,
       runValidators: true,
     });
-
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
 
     return res.json(product);
   } catch (error) {
