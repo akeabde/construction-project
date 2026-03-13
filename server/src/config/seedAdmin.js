@@ -7,6 +7,7 @@ const ensureAdminExists = async () => {
   const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || "";
   const name = (process.env.ADMIN_NAME || "Admin").trim();
+  const forceReset = String(process.env.ADMIN_FORCE_RESET || "").trim().toLowerCase() === "true";
 
   // Si email/password absents, on ne fait rien.
   if (!email || !password) {
@@ -19,11 +20,28 @@ const ensureAdminExists = async () => {
   // Chercher un utilisateur avec cet email.
   const existingUser = await User.findOne({ email });
   if (existingUser) {
-    // Si utilisateur existe deja, on synchronise ses infos admin.
-    existingUser.name = name;
-    existingUser.role = "admin";
-    existingUser.passwordHash = hashedPassword;
-    await existingUser.save();
+    // Si utilisateur existe deja, on garantit role admin.
+    let hasChanges = false;
+
+    if (existingUser.role !== "admin") {
+      existingUser.role = "admin";
+      hasChanges = true;
+    }
+
+    if (name && existingUser.name !== name) {
+      existingUser.name = name;
+      hasChanges = true;
+    }
+
+    // Ne reinitialiser le mot de passe que si forceReset = true.
+    if (forceReset) {
+      existingUser.passwordHash = hashedPassword;
+      hasChanges = true;
+    }
+
+    if (hasChanges) {
+      await existingUser.save();
+    }
   } else {
     // Sinon, on cree l admin.
     await User.create({
@@ -33,11 +51,6 @@ const ensureAdminExists = async () => {
       role: "admin",
     });
   }
-
-  // Important:
-  // tout autre compte avec role "admin" devient "user"
-  // pour eviter que l ancien admin reste actif.
-  await User.updateMany({ role: "admin", email: { $ne: email } }, { role: "user" });
 };
 
 module.exports = ensureAdminExists;

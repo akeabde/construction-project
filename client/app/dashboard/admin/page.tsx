@@ -19,6 +19,7 @@ type ProductForm = {
   price: string;
   imageUrl: string;
   category: string;
+  stock: string;
 };
 
 // Valeur initiale vide pour le formulaire produit.
@@ -28,6 +29,7 @@ const EMPTY_PRODUCT_FORM: ProductForm = {
   price: "",
   imageUrl: "",
   category: "",
+  stock: "0",
 };
 
 // Les 3 decisions que l admin peut prendre sur une commande.
@@ -225,7 +227,7 @@ export default function AdminDashboardPage() {
     const { name, value } = event.target;
 
     // Securite: on ignore tout champ inconnu.
-    if (!["title", "description", "price", "imageUrl", "category"].includes(name)) {
+    if (!["title", "description", "price", "imageUrl", "category", "stock"].includes(name)) {
       return;
     }
 
@@ -255,6 +257,7 @@ export default function AdminDashboardPage() {
         price: Number(productForm.price),
         imageUrl: productForm.imageUrl.trim(),
         category: productForm.category.trim() || "General",
+        stock: Number(productForm.stock),
       };
 
       // Mode edition.
@@ -294,6 +297,7 @@ export default function AdminDashboardPage() {
       price: String(product.price),
       imageUrl: product.imageUrl,
       category: product.category,
+      stock: String(product.stock ?? 0),
     });
     setActiveTab("products");
   };
@@ -507,6 +511,16 @@ export default function AdminDashboardPage() {
               step="0.01"
               placeholder="Prix"
               value={productForm.price}
+              onChange={handleProductInputChange}
+              required
+            />
+            <input
+              name="stock"
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Stock"
+              value={productForm.stock}
               onChange={handleProductInputChange}
               required
             />

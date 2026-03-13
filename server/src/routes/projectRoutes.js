@@ -32,7 +32,7 @@ const isProjectPayloadValid = (payload) => {
 
 // POST /api/projects
 // Creer une nouvelle demande de projet.
-router.post("/", async (req, res) => {
+router.post("/", checkAuth, async (req, res) => {
   try {
     // 1) Lire et nettoyer les champs.
     const payload = readProjectPayload(req.body);
