@@ -1,74 +1,75 @@
-# 👷 FIKHI CONSTRUCTION - Full-Stack App
+# 🏗️ FIKHI CONSTRUCTION - Système de Gestion Intégré
 
-Ce projet est une solution complète de gestion pour les entreprises de construction, permettant de gérer le catalogue de produits, les commandes clients et les demandes de projets via une interface moderne et performante.
+[![Next.js](https://img.shields.io/badge/Frontend-Next.js%2014-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
+[![Node.js](https://img.shields.io/badge/Backend-Node.js%20%2F%20Express-green?style=for-the-badge&logo=node.js)](https://nodejs.org/)
+[![MongoDB](https://img.shields.io/badge/Database-MongoDB-47A248?style=for-the-badge&logo=mongodb)](https://www.mongodb.com/)
+[![Docker](https://img.shields.io/badge/Deployment-Docker%20%26%20Nginx-0db7ed?style=for-the-badge&logo=docker)](https://www.docker.com/)
+
+Bienvenue sur **FIKHI CONSTRUCTION**, une application Full-Stack complète pour la gestion de matériaux et de chantiers. Ce projet a été conçu pour allier **esthétique premium** et **simplicité de code extrême (Niveau 3/10)**.
 
 ---
 
 ## 🌟 Concept & Services
 
-L'application **FIKHI CONSTRUCTION** propose trois piliers de services :
+L'application offre une solution numérique aux défis de la construction moderne au Maroc :
 
-1.  **Vente de Matériaux** : Un catalogue complet avec gestion des stocks en temps réel et panier d'achat.
-2.  **Gestion de Commandes** : Un flux simplifié pour les clients et un tableau de bord complet pour l'administration.
-3.  **Demandes de Projets** : Un module permettant aux clients de soumettre des demandes de devis ou de travaux personnalisés.
-
----
-
-## 🏗️ Architecture du Projet (Docker & Nginx)
-
-L'application utilise une architecture moderne avec des **Conteneurs Docker** et un **Reverse Proxy Nginx**.
-
-1.  **Frontend (Next.js)** : Port `3000` (Interne). C'est l'interface visuelle.
-2.  **Backend (Node/Express)** : Port `5000` (Interne). C'est l'API qui communique avec la base de données.
-3.  **Base de données (MongoDB)** : Port `27017` (Interne). Stockage des données (Produits, Users).
-4.  **Proxy (Nginx)** : Port **`80`** (Host). C'est la **porte d'entrée unique**. Elle redirige les requêtes vers le bon service.
+- **📦 Catalogue Matériaux** : Consultation rapide des prix (Ciment, Acier, Outillage) avec calcul de panier.
+- **🛒 Commande Directe** : Flux simplifié de l'ajout au panier jusqu'à la validation par le client.
+- **🏗️ Demandes de Projets** : Module de soumission pour les grands travaux (Villas, Immeubles, Rénovations).
+- **🛡️ Panel Administration** : Gestion centralisée des stocks, des factures et réponses aux clients.
 
 ---
 
-## 🚀 Démarrage Rapide (Recommandé)
+## 🚀 Démarrage Instantané (Docker)
 
-Grâce à Docker, vous n'avez pas besoin d'installer Node.js ou MongoDB localement. Une seule commande suffit :
+Grâce à Docker, l'environnement est prêt en 2 minutes sans aucune installation manuelle de base de données.
 
-1.  **Lancer tout le projet :**
-    ```bash
-    docker-compose up --build -d
-    ```
-2.  **Accéder à l'application :**
-    - Ouvrez votre navigateur sur : [http://localhost](http://localhost) (le port 80 est automatique).
+### 1. Lancer tout le projet
+```bash
+docker-compose up --build -d
+```
 
----
-
-## 🌍 Partage en Ligne (Ngrok)
-
-Pour montrer votre travail à un professeur ou un client via un lien public :
-
-1.  Installez Ngrok et configurez votre jeton (auth token).
-2.  Lancez le tunnel sur le port **80** (le port de Nginx) :
-    ```bash
-    ngrok http 80
-    ```
-3.  Partagez le lien `https://...` généré. Le frontend et le backend fonctionneront ensemble sur ce seul lien.
+### 2. Accès aux Services
+- **Site Web (Client & Admin)** : [http://localhost](http://localhost)
+- **API du Serveur** : `http://localhost:5000/api`
 
 ---
 
-## 🔑 Accès Administrateur
+## 🔑 Identifiants de Test
 
-Par sécurité, les identifiants ne sont pas écrits en clair ici. Vous pouvez les retrouver ou les modifier dans le fichier `docker-compose.yml` (sous la section `environment` du service `server`).
-
-- **ADMIN_EMAIL** : Votre email admin.
-- **ADMIN_PASSWORD** : Votre mot de passe admin.
-
----
-
-## 📁 Structure des Dossiers
-
-- `/client` : Tout le code de l'interface (Next.js).
-- `/server` : Tout le code de l'API (Express + Mongoose).
-- `docker-compose.yml` : Configuration de l'orchestration des services.
-- `nginx.conf` : Configuration du routage (Proxy).
+| Rôle | Email | Mot de passe |
+| :--- | :--- | :--- |
+| **Administrateur** | *Défini dans docker-compose.yml* | *Défini dans docker-compose.yml* |
+| **Client** | *À créer via Inscription* | *Libre* |
 
 ---
 
-## 👨‍💻 Note pour le Développeur
+## 📁 Architecture du Projet
 
-Le code source est structuré de manière propre et **entièrement documenté en français** pour faciliter la maintenance et les évolutions futures.
+```text
+├── client/          # Frontend Next.js (React + Tailwind)
+├── server/          # Backend Node.js (Express + Mongoose)
+├── nginx.conf       # Proxy Inverse (Routage automatique)
+└── docker-compose.yml # Orchestration des conteneurs
+```
+
+---
+
+## 👨‍💻 Pour le Développeur Junior
+
+Ce projet est une excellente base d'apprentissage. Nous avons volontairement :
+- Utilisé une **logique linéaire** (Lecture de haut en bas).
+- Évité les abstractions trop complexes pour favoriser la compréhension.
+- Ajouté des **commentaires détaillés en français** sur chaque fonction clé.
+
+---
+
+## 🛠️ Tech Stack
+- **Frontend** : Next.js 14 (App Router), Tailwind CSS.
+- **Backend** : Node.js, Express, JWT (Sécurité).
+- **Base de données** : MongoDB via Mongoose.
+- **Infrastructure** : Docker, Docker-compose, Nginx.
+
+---
+
+<p align="center">Réalisé avec ❤️ pour la communauté des développeurs marocains.</p>

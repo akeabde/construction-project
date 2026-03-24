@@ -33,106 +33,149 @@ const createToken = (user) => {
 };
 
 // ============================================================
+// MIDDLEWARE : VERIFIER LA CONNEXION (checkAuth)
+// Role : Empêcher les visiteurs non connectés d'accéder à certaines pages.
+// ============================================================
+const checkAuth = (req, res, next) => {
+  // 1) On regarde si l'utilisateur a envoyé son "Badge" (Token) dans la requête.
+  const enteteAuthentification = req.headers.authorization;
+
+  // Si l'en-tête n'existe pas, on arrête tout.
+  if (!enteteAuthentification) {
+    return res.status(401).json({ message: "Désolé, vous n'êtes pas connecté." });
+  }
+
+  // 2) On vérifie que le format est correct (doit commencer par 'Bearer ').
+  if (!enteteAuthentification.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Le format du badge est incorrect." });
+  }
+
+  // 3) On récupère uniquement le code du jeton (on retire 'Bearer ').
+  const jetonATester = enteteAuthentification.slice(7);
+
+  // 4) On vérifie si le jeton est valide avec notre clé secrète.
+  const cleSecrete = process.env.JWT_SECRET;
+
+  try {
+    const donneesDecodees = jwt.verify(jetonATester, cleSecrete);
+
+    // Si c'est bon, on enregistre les infos de l'utilisateur dans 'req.user'.
+    // Comme ça, les prochaines fonctions sauront qui est connecté.
+    req.user = donneesDecodees;
+
+    // On passe à la suite !
+    next();
+  } catch (erreur) {
+    // Si le jeton est faux ou expiré, on refuse l'accès.
+    return res.status(401).json({ message: "Votre session a expiré, merci de vous reconnecter." });
+  }
+};
+
+// ============================================================
 // ROUTE : INSCRIPTION (REGISTER)
-// Action : Crée un nouvel utilisateur.
+// Action : Crée un nouveau profil utilisateur dans la base.
 // ============================================================
 router.post("/register", async (req, res) => {
   try {
-    // 1) Lire et nettoyer les champs du formulaire.
-    const name = cleanText(req.body.name);
-    const email = cleanEmail(req.body.email);
-    const password = String(req.body.password || "");
+    // 1) On récupère les informations envoyées par le visiteur.
+    const nomSaisi = cleanText(req.body.name);
+    const emailSaisi = cleanEmail(req.body.email);
+    const motDePasseSaisi = String(req.body.password || "");
 
-    // 2) Vérifier que tout est rempli.
-    if (!name || !email || !password) {
-      return res.status(400).json({ message: "Le nom, l'email et le mot de passe sont obligatoires." });
+    // 2) On vérifie si tous les champs sont bien remplis.
+    if (!nomSaisi || !emailSaisi || !motDePasseSaisi) {
+      return res.status(400).json({ message: "Merci de remplir tous les champs (Nom, Email, Mot de passe)." });
     }
 
-    // 3) Le mot de passe doit être assez long (sécurité).
-    if (password.length < 6) {
-      return res.status(400).json({ message: "Le mot de passe doit faire au moins 6 caractères." });
+    // 3) On vérifie la longueur du mot de passe (minimum 6).
+    if (motDePasseSaisi.length < 6) {
+      return res.status(400).json({ message: "Le mot de passe doit faire 6 caractères au minimum." });
     }
 
-    // 4) Vérifier si cet email appartient déjà à quelqu'un.
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ message: "Cet email est déjà utilisé." });
+    // 4) On vérifie si cet email est déjà pris par quelqu'un d'autre.
+    const utilisateurDejaExistant = await User.findOne({ email: emailSaisi });
+    if (utilisateurDejaExistant) {
+      return res.status(409).json({ message: "Ce compte existe déjà avec cet email." });
     }
 
-    // 5) Sécurité : On ne stocke JAMAIS le mot de passe en clair.
-    // On utilise bcrypt pour le transformer en charabia (hash).
-    const passwordHash = await bcrypt.hash(password, 10);
+    // 5) On transforme le mot de passe en code secret (Hash) pour la sécurité.
+    const motDePasseHash = await bcrypt.hash(motDePasseSaisi, 10);
 
-    // 6) Enregistrement dans MongoDB.
-    const user = await User.create({
-      name,
-      email,
-      passwordHash,
-      role: "user",
+    // 6) On crée l'utilisateur dans MongoDB.
+    const nouvelUtilisateur = await User.create({
+      name: nomSaisi,
+      email: emailSaisi,
+      passwordHash: motDePasseHash,
+      role: "user", // Par défaut, tout le monde est un utilisateur simple.
     });
 
-    // 7) On connecte l'utilisateur tout de suite en créant un jeton JWT.
-    const token = createToken(user);
+    // 7) On crée un jeton de connexion automatique.
+    const jetonDeConnexion = createToken(nouvelUtilisateur);
 
-    // 8) Succès ! On renvoie la session (token + infos utilisateur).
+    // 8) On renvoie le profil créé.
     return res.status(201).json({
-      token,
+      token: jetonDeConnexion,
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
+        id: nouvelUtilisateur._id,
+        name: nouvelUtilisateur.name,
+        email: nouvelUtilisateur.email,
+        role: nouvelUtilisateur.role,
       },
     });
-  } catch (error) {
-    console.error("Erreur inscription:", error);
-    return res.status(500).json({ message: "Erreur lors de l'inscription." });
+
+  } catch (erreurFatale) {
+    console.error("Erreur technique d'inscription:", erreurFatale);
+    return res.status(500).json({ message: "Désolé, l'inscription a échoué techniquement." });
   }
 });
 
 // ============================================================
 // ROUTE : CONNEXION (LOGIN)
-// Action : Vérifie les identifiants et connecte l'utilisateur.
+// Action : Vérifie l'email et le mot de passe pour donner l'accès.
 // ============================================================
 router.post("/login", async (req, res) => {
   try {
-    // 1) Lire les identifiants.
-    const email = cleanEmail(req.body.email);
-    const password = String(req.body.password || "");
+    // 1) On récupère ce que l'utilisateur a tapé.
+    const emailSaisi = cleanEmail(req.body.email);
+    const motDePasseSaisi = String(req.body.password || "");
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email et mot de passe requis." });
+    // 2) On vérifie si les champs sont vides.
+    if (!emailSaisi || !motDePasseSaisi) {
+      return res.status(400).json({ message: "Veuillez remplir l'email et le mot de passe." });
     }
 
-    // 2) Chercher l'utilisateur par son email.
-    const user = await User.findOne({ email });
-    if (!user) {
-      // Pour la sécurité, on reste vague sur l'erreur (Identifiants invalides).
-      return res.status(401).json({ message: "Identifiants invalides." });
+    // 3) On cherche dans la base de données si un utilisateur a cet email.
+    const utilisateurTrouve = await User.findOne({ email: emailSaisi });
+
+    if (!utilisateurTrouve) {
+      // Si on ne trouve personne, on renvoie une erreur.
+      return res.status(401).json({ message: "Email ou mot de passe incorrect." });
     }
 
-    // 3) Comparer le mot de passe saisi avec celui (hashé) de la base.
-    const passwordMatches = await bcrypt.compare(password, user.passwordHash);
-    if (!passwordMatches) {
-      return res.status(401).json({ message: "Identifiants invalides." });
+    // 4) On vérifie si le mot de passe est le bon.
+    // On compare le texte saisi avec le 'hash' enregistré.
+    const estLeBonMotDePasse = await bcrypt.compare(motDePasseSaisi, utilisateurTrouve.passwordHash);
+
+    if (estLeBonMotDePasse === false) {
+      return res.status(401).json({ message: "Email ou mot de passe incorrect." });
     }
 
-    // 4) Créer un jeton JWT (la clé de l'utilisateur).
-    const token = createToken(user);
+    // 5) Tout est bon ! On crée le jeton de connexion (Token).
+    const jetonDeConnexion = createToken(utilisateurTrouve);
 
-    // 5) Renvoyer la session.
+    // 6) On renvoie la réponse finale avec le token et les infos.
     return res.json({
-      token,
+      token: jetonDeConnexion,
       user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
+        id: utilisateurTrouve._id,
+        name: utilisateurTrouve.name,
+        email: utilisateurTrouve.email,
+        role: utilisateurTrouve.role,
       },
     });
-  } catch (error) {
-    console.error("Erreur connexion:", error);
-    return res.status(500).json({ message: "Erreur lors de la connexion." });
+  } catch (erreurFatale) {
+    console.error("Erreur technique de connexion:", erreurFatale);
+    return res.status(500).json({ message: "Désolé, une erreur technique est survenue." });
   }
 });
 

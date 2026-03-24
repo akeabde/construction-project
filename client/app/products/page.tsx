@@ -4,16 +4,19 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import SiteHeader from "@/components/site-header";
-import { apiRequest } from "@/lib/api";
-import { loadSession } from "@/lib/session";
+import { appelAPI } from "@/lib/api";
+import { chargerSession } from "@/lib/session";
 import type { Order, Product, Session } from "@/lib/types";
-import { formatPriceMad, getErrorMessage } from "@/lib/ui";
+import { formatPriceMad } from "@/lib/ui";
 
-// Panier stocke la quantite par id produit.
-type CartMap = { [productId: string]: number };
+// --- TYPES SIMPLIFIÉS ---
 
-// Formulaire de livraison/commande.
-type OrderForm = {
+// Le panier est un objet qui associe un "ID de produit" à une "Quantité".
+// Exemple : { "id123": 2, "id456": 1 }
+type PanierType = { [idProduit: string]: number };
+
+// Les infos nécessaires pour livrer une commande.
+type FormulaireCommande = {
   fullName: string;
   phone: string;
   city: string;
@@ -21,8 +24,8 @@ type OrderForm = {
   notes: string;
 };
 
-// Valeur initiale du formulaire commande.
-const EMPTY_ORDER_FORM: OrderForm = {
+// Valeurs vides par défaut pour le formulaire.
+const FORMULAIRE_VIDE: FormulaireCommande = {
   fullName: "",
   phone: "",
   city: "",
@@ -30,457 +33,351 @@ const EMPTY_ORDER_FORM: OrderForm = {
   notes: "",
 };
 
-// Traduction simple des statuts commande.
-const ORDER_STATUS_LABELS: Record<string, string> = {
-  in_progress: "En cours",
-  accepted: "Commande acceptee",
-  refused: "Commande refusee",
-  out_of_stock: "Rupture de stock",
-};
-
-// Helper simple pour afficher un statut lisible.
-const getOrderStatusLabel = (status: string) => ORDER_STATUS_LABELS[status] || status;
-
 export default function ProductsPage() {
-  // Session utilisateur (null si non connecte).
-  const [session, setSession] = useState<Session | null>(null);
+  // --- VARIABLES D'ÉTAT (STATE) ---
+  const [infosSession, setInfosSession] = useState<Session | null>(null);
+  const [listeProduits, setListeProduits] = useState<Product[]>([]);
+  const [mesCommandes, setMesCommandes] = useState<Order[]>([]);
+  const [panier, setPanier] = useState<PanierType>({});
+  const [donneesFormulaire, setDonneesFormulaire] = useState<FormulaireCommande>(FORMULAIRE_VIDE);
 
-  // Liste de tous les produits disponibles.
-  const [products, setProducts] = useState<Product[]>([]);
+  const [chargementEnCours, setChargementEnCours] = useState(true);
+  const [envoiCommandeEnCours, setEnvoiCommandeEnCours] = useState(false);
+  const [messageRetour, setMessageRetour] = useState("");
 
-  // Liste des commandes de l utilisateur connecte.
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [produitSelectionne, setProduitSelectionne] = useState<Product | null>(null);
 
-  // Etat du panier.
-  const [cart, setCart] = useState<CartMap>({});
-
-  // Etat du formulaire de commande.
-  const [orderForm, setOrderForm] = useState<OrderForm>(EMPTY_ORDER_FORM);
-
-  // Etats UI.
-  const [loading, setLoading] = useState(true);
-  const [placingOrder, setPlacingOrder] = useState(false);
-  const [message, setMessage] = useState("");
-
-  // Produit actuellement ouvert dans la fenetre details.
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-
-  // Chargement initial (session + produits + commandes utilisateur).
+  // --- 1) CHARGEMENT INITIAL ---
   useEffect(() => {
-    const savedSession = loadSession();
-
-    // Si utilisateur connecte role user => on garde la session.
-    if (savedSession && savedSession.user.role === "user") {
-      setSession(savedSession);
-
-      // On pre-remplit le nom.
-      setOrderForm((current) => ({
-        ...current,
-        fullName: savedSession.user.name,
-      }));
+    const sessionActuelle = chargerSession();
+    if (sessionActuelle) {
+      setInfosSession(sessionActuelle);
+      // On pré-remplit le nom complet pour aller plus vite.
+      setDonneesFormulaire((prev) => ({ ...prev, fullName: sessionActuelle.user.name }));
     }
 
-    // Fonction locale de chargement.
-    const loadData = async () => {
+    // Fonction pour récupérer les données du serveur.
+    const recupererDonnees = async () => {
       try {
-        // Charger produits.
-        const productList = await apiRequest<Product[]>("/products");
-        setProducts(productList);
+        // A) On récupère tous les produits.
+        const produitsRecus = await appelAPI<Product[]>("/products");
+        setListeProduits(produitsRecus);
 
-        // Charger commandes personnelles si user connecte.
-        if (savedSession && savedSession.user.role === "user") {
-          const myOrders = await apiRequest<Order[]>("/orders/mine", {
-            token: savedSession.token,
+        // B) Si on est connecté, on télécharge l'historique de nos commandes.
+        if (sessionActuelle) {
+          const commandesRecues = await appelAPI<Order[]>("/orders/mine", {
+            token: sessionActuelle.token
           });
-          setOrders(myOrders);
+          setMesCommandes(commandesRecues);
         }
-      } catch (error) {
-        setMessage(getErrorMessage(error, "Impossible de charger les donnees"));
+      } catch (erreur) {
+        console.error("Erreur de chargement:", erreur);
+        setMessageRetour("Impossible de charger les produits.");
       } finally {
-        setLoading(false);
+        setChargementEnCours(false);
       }
     };
 
-    void loadData();
+    recupererDonnees();
   }, []);
 
-  // Les produits mis en avant d abord.
-  const displayProducts = [...products].sort((a, b) => Number(b.featured) - Number(a.featured));
+  // --- 2) LOGIQUE DU PANIER ---
 
-  // Transformer "cart map" en liste exploitable.
-  const cartItems: { product: Product; quantity: number }[] = [];
-  for (const product of products) {
-    const quantity = cart[product._id] || 0;
-    if (quantity > 0) {
-      cartItems.push({ product, quantity });
-    }
-  }
-
-  // Compter total articles + total prix.
-  let cartCount = 0;
-  let cartTotal = 0;
-  for (const item of cartItems) {
-    cartCount += item.quantity;
-    cartTotal += item.product.price * item.quantity;
-  }
-
-  // Ajouter 1 quantite d un produit au panier.
-  const addToCart = (productId: string) => {
-    if (!session) {
-      setMessage("Connectez-vous d abord pour commander.");
+  // Ajouter un produit au panier (+1).
+  const ajouterAuPanier = (idProduit: string) => {
+    if (!infosSession) {
+      setMessageRetour("Veuillez vous connecter pour commander.");
       return;
     }
-
-    setCart((current) => ({
-      ...current,
-      [productId]: (current[productId] || 0) + 1,
+    setPanier((actuel) => ({
+      ...actuel,
+      [idProduit]: (actuel[idProduit] || 0) + 1,
     }));
   };
 
-  // Changer manuellement la quantite d un produit.
-  const changeQuantity = (productId: string, nextQuantity: number) => {
-    setCart((current) => {
-      const nextCart = { ...current };
-
-      // Quantite <= 0 => supprimer du panier.
-      if (nextQuantity <= 0) {
-        delete nextCart[productId];
+  // Changer ou supprimer un produit du panier.
+  const modifierQuantite = (idProduit: string, nouvelleQuantite: number) => {
+    setPanier((actuel) => {
+      const nouveauPanier = { ...actuel };
+      if (nouvelleQuantite <= 0) {
+        delete nouveauPanier[idProduit];
       } else {
-        nextCart[productId] = nextQuantity;
+        nouveauPanier[idProduit] = nouvelleQuantite;
       }
-
-      return nextCart;
+      return nouveauPanier;
     });
   };
 
-  // Mettre a jour les champs du formulaire commande.
-  const handleOrderInputChange = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = event.target;
-
-    setOrderForm((current) => ({
-      ...current,
-      [name]: value,
+  // Convertir le panier (objet) en liste lisible d'articles.
+  const articlesDansLePanier = listeProduits
+    .filter((p) => panier[p._id] > 0)
+    .map((p) => ({
+      produit: p,
+      quantite: panier[p._id],
+      totalLigne: p.price * panier[p._id]
     }));
+
+  // Calculer le total global du panier.
+  const totalGlobalPanier = articlesDansLePanier.reduce((somme, item) => somme + item.totalLigne, 0);
+
+  // --- 3) LOGIQUE DU FORMULAIRE ---
+
+  const miseAJourChamp = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setDonneesFormulaire({ ...donneesFormulaire, [e.target.name]: e.target.value });
   };
 
-  // Ouvrir popup details produit.
-  const openProductDetails = (product: Product) => {
-    setSelectedProduct(product);
-  };
+  // Envoyer la commande finale au backend.
+  const validerLaCommande = async (evenement: FormEvent) => {
+    evenement.preventDefault();
+    if (articlesDansLePanier.length === 0) return;
 
-  // Fermer popup details produit.
-  const closeProductDetails = () => {
-    setSelectedProduct(null);
-  };
-
-  // Envoyer la commande.
-  const placeOrder = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (!session) {
-      setMessage("Connectez-vous d abord.");
-      return;
-    }
-
-    if (cartItems.length === 0) {
-      setMessage("Votre panier est vide.");
-      return;
-    }
-
-    setPlacingOrder(true);
-    setMessage("");
+    setEnvoiCommandeEnCours(true);
+    setMessageRetour("");
 
     try {
-      // Construire items API depuis panier.
-      const orderItems = cartItems.map((item) => ({
-        productId: item.product._id,
-        quantity: item.quantity,
+      // Préparation de la liste pour l'API.
+      const articlesPourBackend = articlesDansLePanier.map((item) => ({
+        productId: item.produit._id,
+        quantity: item.quantite
       }));
 
-      // Creation de commande.
-      await apiRequest<Order>("/orders", {
+      // Appel API de création de commande.
+      await appelAPI("/orders", {
         method: "POST",
-        token: session.token,
+        token: infosSession?.token,
         body: {
-          items: orderItems,
-          ...orderForm,
-        },
+          items: articlesPourBackend,
+          ...donneesFormulaire
+        }
       });
 
-      // Recharger commandes utilisateur.
-      const myOrders = await apiRequest<Order[]>("/orders/mine", {
-        token: session.token,
+      // On vide le panier et on actualise les commandes.
+      setPanier({});
+      const nouvellesCommandes = await appelAPI<Order[]>("/orders/mine", {
+        token: infosSession?.token
       });
-      setOrders(myOrders);
-
-      // Vider panier et notes.
-      setCart({});
-      setOrderForm((current) => ({
-        ...current,
-        notes: "",
-      }));
-
-      setMessage("Commande envoyee avec succes.");
-    } catch (error) {
-      setMessage(getErrorMessage(error, "Commande echouee"));
+      setMesCommandes(nouvellesCommandes);
+      
+      setMessageRetour("🎉 Votre commande a été enregistrée avec succès !");
+    } catch (erreur: any) {
+      setMessageRetour(erreur.message || "Erreur lors de la commande.");
     } finally {
-      setPlacingOrder(false);
+      setEnvoiCommandeEnCours(false);
     }
   };
 
   return (
     <>
       <SiteHeader />
-      <main className="shell space-y-6 py-6">
-        {/* Bandeau principal */}
-        <section className="panel hero-card p-6 md:p-8">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <p className="chip inline-flex border-white/30 bg-white/10 text-white">Catalogue FIKHI CONSTRUCTION</p>
-              <h1 className="mt-3 font-display text-4xl font-bold text-white md:text-5xl">Produits</h1>
-              <p className="mt-3 text-sm text-white/85">Choisissez vos produits, ajoutez-les au panier et passez votre commande rapidement.</p>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-xl border border-white/25 bg-white/10 p-3 text-center text-white">
-                <p className="text-xs text-white/70">Produits</p>
-                <p className="font-display text-xl font-bold">{loading ? "..." : products.length}</p>
+      
+      <main className="shell py-10 space-y-10">
+        
+        {/* SECTION 1 : BANDEAU D'ACCUEIL */}
+        <section className="panel bg-[#2f2b25] text-white p-8 rounded-3xl">
+          <div className="max-w-2xl space-y-4">
+            <h1 className="font-display text-5xl font-bold">Catalogue Matériaux</h1>
+            <p className="text-lg text-white/80">
+              Commandez en quelques clics tout le nécessaire pour vos chantiers. 
+              Livraison rapide garantie.
+            </p>
+            {!infosSession && (
+              <div className="flex gap-4 pt-2">
+                <Link href="/auth/login" className="btn bg-white text-[#2f2b25] hover:bg-white/90">Se Connecter</Link>
+                <Link href="/auth/register" className="btn border-white text-white">S'Inscrire</Link>
               </div>
-              <div className="rounded-xl border border-white/25 bg-white/10 p-3 text-center text-white">
-                <p className="text-xs text-white/70">Panier</p>
-                <p className="font-display text-xl font-bold">{cartCount}</p>
-              </div>
-              <div className="rounded-xl border border-white/25 bg-white/10 p-3 text-center text-white">
-                <p className="text-xs text-white/70">Total</p>
-                <p className="font-display text-xl font-bold">{formatPriceMad(cartTotal)}</p>
-              </div>
-            </div>
+            )}
           </div>
-
-          {/* Boutons connexion/inscription pour visiteur */}
-          {!session ? (
-            <div className="mt-5 flex gap-2">
-              <Link href="/auth/login" className="btn btn-ghost">
-                Connexion
-              </Link>
-              <Link href="/auth/register" className="btn btn-primary">
-                Inscription
-              </Link>
-            </div>
-          ) : null}
         </section>
 
-        {/* Message de retour global */}
-        {message ? <p className="panel rounded-xl bg-[#fff4e5] p-3 text-sm text-[#c46a00]">{message}</p> : null}
-
-        <div className="grid gap-5 lg:grid-cols-[1.8fr_1fr]">
-          {/* Liste produits */}
-          <section className="panel p-5">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="font-display text-2xl font-bold">Liste des produits</h2>
-              <span className="chip">{loading ? "Chargement" : `${products.length} produits`}</span>
-            </div>
-
-            {loading ? (
-              <p className="mt-4 text-sm text-[#5d5448]">Chargement...</p>
-            ) : products.length === 0 ? (
-              <p className="mt-4 text-sm text-[#5d5448]">Aucun produit trouve.</p>
+        {/* SECTION 2 : PRODUITS ET PANIER */}
+        <div className="grid lg:grid-cols-3 gap-8">
+          
+          {/* A) COLONNE DE GAUCHE : LES PRODUITS */}
+          <div className="lg:col-span-2 space-y-6">
+            <h2 className="font-display text-3xl font-bold text-[#1a1a1a]">Nos Articles Disponibles</h2>
+            
+            {chargementEnCours ? (
+              <div className="p-20 text-center text-[#6b7280]">Chargement du catalogue...</div>
             ) : (
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                {displayProducts.map((product) => (
-                  <article
-                    key={product._id}
-                    className="group overflow-hidden rounded-2xl border border-[#d7cebf] bg-white shadow-[0_12px_24px_rgba(64,50,31,0.1)] transition hover:-translate-y-0.5 hover:shadow-[0_16px_30px_rgba(64,50,31,0.14)]"
-                  >
-                    <button className="block h-48 w-full bg-[#ece5d7]" type="button" onClick={() => openProductDetails(product)}>
+              <div className="grid sm:grid-cols-2 gap-6">
+                {listeProduits.map((p) => (
+                  <article key={p._id} className="panel bg-white p-4 group transition-all hover:shadow-xl rounded-2xl border border-[#e5e7eb]">
+                    <div 
+                      className="aspect-video bg-[#f3f4f6] rounded-xl overflow-hidden cursor-pointer"
+                      onClick={() => setProduitSelectionne(p)}
+                    >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={product.imageUrl}
-                        alt={product.title}
-                        className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
-                      />
-                    </button>
-
-                    <div className="space-y-3 p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="font-semibold text-[#0f172a]">{product.title}</p>
-                          <p className="mt-1 text-xs text-[#7a6f60]">
-                            {product.stock} {product.unit || "u"} en stock
-                          </p>
-                        </div>
-                        <span className="chip">{product.category}</span>
+                      <img src={p.imageUrl} alt={p.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                    </div>
+                    <div className="mt-4 space-y-2">
+                      <div className="flex justify-between items-start">
+                        <h3 className="font-bold text-lg text-[#111827]">{p.title}</h3>
+                        <span className="text-[#ff7a18] font-bold">{formatPriceMad(p.price)}</span>
                       </div>
-
-                      <p className="min-h-10 text-sm text-[#5d5448]">{product.description}</p>
-
-                      {product.specs?.length ? (
-                        <div className="flex flex-wrap gap-2">
-                          {product.specs.slice(0, 2).map((spec) => (
-                            <span key={`${product._id}-${spec}`} className="rounded-full border border-[#ddd2c0] bg-[#faf6ee] px-2 py-1 text-xs text-[#6c5e4a]">
-                              {spec}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-
-                      <div className="flex items-center justify-between pt-1">
-                        <p className="font-bold text-[#c46a00]">{formatPriceMad(product.price)}</p>
-                        <div className="flex gap-2">
-                          <button className="btn btn-ghost text-sm" type="button" onClick={() => openProductDetails(product)}>
-                            Decouvrir
-                          </button>
-                          <button className="btn btn-primary text-sm" type="button" onClick={() => addToCart(product._id)}>
-                            Ajouter
-                          </button>
-                        </div>
+                      <p className="text-sm text-[#6b7280] line-clamp-2">{p.description}</p>
+                      <div className="pt-2 flex gap-2">
+                        <button 
+                          className="btn btn-primary flex-1 py-2 text-sm"
+                          onClick={() => ajouterAuPanier(p._id)}
+                        >
+                          Ajouter au Panier
+                        </button>
+                        <button 
+                          className="btn btn-ghost py-2 text-sm"
+                          onClick={() => setProduitSelectionne(p)}
+                        >
+                          Détails
+                        </button>
                       </div>
                     </div>
                   </article>
                 ))}
               </div>
             )}
-          </section>
+          </div>
 
-          {/* Panier + formulaire commande */}
-          <aside className="panel h-fit space-y-4 p-5 lg:sticky lg:top-5">
-            <div className="flex items-center justify-between">
-              <h2 className="font-display text-2xl font-bold">Panier</h2>
-              <span className="chip">{cartCount} articles</span>
-            </div>
-
-            {!session ? (
-              <p className="text-sm text-[#5d5448]">Connectez-vous pour utiliser le panier.</p>
-            ) : cartItems.length === 0 ? (
-              <p className="text-sm text-[#5d5448]">Le panier est vide.</p>
-            ) : (
-              <div className="space-y-2">
-                {cartItems.map((item) => (
-                  <div key={item.product._id} className="rounded-xl border border-[#d7cebf] bg-[#f8f1e6] p-3">
-                    <div className="flex items-start justify-between gap-2">
-                      <p className="text-sm font-semibold">{item.product.title}</p>
-                      <button
-                        type="button"
-                        className="rounded-full border border-[#d9cdb9] bg-white px-2 py-0.5 text-xs font-bold text-[#6b5d49] hover:bg-[#f3eadc]"
-                        onClick={() => changeQuantity(item.product._id, 0)}
-                      >
-                        X
-                      </button>
-                    </div>
-
-                    <p className="text-xs text-[#5d5448]">{formatPriceMad(item.product.price)}</p>
-
-                    <div className="mt-2 flex items-center gap-2">
-                      <button type="button" className="btn btn-ghost px-3 py-1 text-sm" onClick={() => changeQuantity(item.product._id, item.quantity - 1)}>
-                        -
-                      </button>
-                      <span className="text-sm font-semibold">{item.quantity}</span>
-                      <button type="button" className="btn btn-ghost px-3 py-1 text-sm" onClick={() => changeQuantity(item.product._id, item.quantity + 1)}>
-                        +
-                      </button>
-                    </div>
+          {/* B) COLONNE DE DROITE : PANIER ET COMMANDE */}
+          <aside className="space-y-6">
+            <section className="panel bg-[#f9fafb] p-6 rounded-2xl border border-[#e5e7eb] sticky top-8">
+              <h2 className="font-display text-2xl font-bold mb-4">Votre Panier</h2>
+              
+              {!infosSession ? (
+                <p className="text-sm text-[#6b7280]">Connectez-vous pour voir votre panier.</p>
+              ) : articlesDansLePanier.length === 0 ? (
+                <p className="text-sm text-[#6b7280]">Votre panier est vide pour le moment.</p>
+              ) : (
+                <div className="space-y-4">
+                  {/* Liste des articles du panier */}
+                  <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
+                    {articlesDansLePanier.map((item) => (
+                      <div key={item.produit._id} className="flex justify-between items-center bg-white p-3 rounded-xl shadow-sm border border-[#f3f4f6]">
+                        <div className="text-sm">
+                          <p className="font-bold text-[#111827]">{item.produit.title}</p>
+                          <p className="text-[#6b7280]">{item.quantite} x {formatPriceMad(item.produit.price)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => modifierQuantite(item.produit._id, item.quantite - 1)} className="btn btn-ghost p-1">-</button>
+                          <span className="font-bold">{item.quantite}</span>
+                          <button onClick={() => modifierQuantite(item.produit._id, item.quantite + 1)} className="btn btn-ghost p-1">+</button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            )}
 
-            <div className="rounded-xl border border-[#d7cebf] bg-[#f5edde] p-3">
-              <p className="text-xs text-[#5d5448]">Montant total</p>
-              <p className="font-display text-2xl font-bold text-[#c46a00]">{formatPriceMad(cartTotal)}</p>
-            </div>
+                  {/* Total */}
+                  <div className="border-t border-[#e5e7eb] pt-4 flex justify-between items-center text-xl font-bold">
+                    <span>Total à payer :</span>
+                    <span className="text-[#ff7a18]">{formatPriceMad(totalGlobalPanier)}</span>
+                  </div>
 
-            <form className="space-y-2 border-t border-[#d8ccb6] pt-3" onSubmit={placeOrder}>
-              <input name="fullName" placeholder="Nom complet" value={orderForm.fullName} onChange={handleOrderInputChange} required />
-              <input name="phone" placeholder="Telephone" value={orderForm.phone} onChange={handleOrderInputChange} required />
-              <input name="city" placeholder="Ville" value={orderForm.city} onChange={handleOrderInputChange} required />
-              <input name="address" placeholder="Adresse" value={orderForm.address} onChange={handleOrderInputChange} required />
-              <textarea name="notes" placeholder="Notes" rows={3} value={orderForm.notes} onChange={handleOrderInputChange} />
-              <button className="btn btn-primary w-full" type="submit" disabled={placingOrder || !session}>
-                {placingOrder ? "Envoi..." : "Passer la commande"}
-              </button>
-            </form>
+                  {/* Formulaire de livraison */}
+                  <form onSubmit={validerLaCommande} className="space-y-3 pt-4 border-t border-[#e5e7eb]">
+                    <p className="text-sm font-bold text-[#374151]">Infos de Livraison</p>
+                    <input name="fullName" placeholder="Votre Nom complet" value={donneesFormulaire.fullName} onChange={miseAJourChamp} required />
+                    <input name="phone" placeholder="Numéro de Téléphone" value={donneesFormulaire.phone} onChange={miseAJourChamp} required />
+                    <input name="city" placeholder="Ville de livraison" value={donneesFormulaire.city} onChange={miseAJourChamp} required />
+                    <textarea name="address" placeholder="Adresse précise" rows={2} value={donneesFormulaire.address} onChange={miseAJourChamp} required className="w-full" />
+                    <textarea name="notes" placeholder="Notes (facultatif)" rows={2} value={donneesFormulaire.notes} onChange={miseAJourChamp} className="w-full" />
+                    
+                    <button 
+                      type="submit" 
+                      className="btn btn-primary w-full py-4 text-lg font-bold"
+                      disabled={envoiCommandeEnCours}
+                    >
+                      {envoiCommandeEnCours ? "Envoi en cours..." : "Confirmer la Commande"}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              {/* Message de succès ou d'erreur */}
+              {messageRetour && (
+                <div className="mt-4 p-4 text-center rounded-xl bg-orange-50 text-orange-700 text-sm font-bold">
+                  {messageRetour}
+                </div>
+              )}
+            </section>
           </aside>
         </div>
 
-        {/* Fenetre details produit */}
-        {selectedProduct ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
-            <div className="panel relative max-h-[92vh] w-full max-w-4xl overflow-y-auto p-5 md:p-6">
-              <button
-                type="button"
-                className="absolute right-4 top-4 rounded-full border border-[#d8ccb6] bg-white px-3 py-1 text-sm font-semibold"
-                onClick={closeProductDetails}
-              >
-                Fermer
-              </button>
+        {/* SECTION 3 : HISTORIQUE DES COMMANDES (En bas) */}
+        {infosSession && mesCommandes.length > 0 && (
+          <section className="panel bg-[#f8f9fa] p-8 rounded-3xl border border-[#e5e7eb]">
+            <h2 className="font-display text-3xl font-bold mb-6">Mon Historique de Commandes</h2>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {mesCommandes.map((cmd) => (
+                <div key={cmd._id} className="bg-white p-5 rounded-2xl shadow-sm border border-[#f3f4f6]">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs uppercase font-bold tracking-widest text-[#9ca3af]">Commande #{cmd._id.slice(-6)}</span>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${cmd.status === 'in_progress' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
+                      {cmd.status === 'in_progress' ? '⏳ En cours' : '✅ Validée'}
+                    </span>
+                  </div>
+                  <p className="text-2xl font-bold text-[#111827]">{formatPriceMad(cmd.totalAmount)}</p>
+                  <p className="text-sm text-[#6b7280] mt-1">{new Date(cmd.createdAt).toLocaleDateString()}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
-              <div className="grid gap-5 md:grid-cols-[1.1fr_1fr]">
-                <div className="overflow-hidden rounded-2xl border border-[#d7cebf] bg-[#ece5d7]">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={selectedProduct.imageUrl} alt={selectedProduct.title} className="h-full w-full object-cover" />
+      </main>
+
+      {/* POPUP : DÉTAILS DU PRODUIT (Modale) */}
+      {produitSelectionne && (
+        <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-4xl rounded-3xl overflow-hidden shadow-2xl relative">
+            <button 
+              className="absolute top-4 right-4 h-10 w-10 bg-white shadow-md rounded-full flex items-center justify-center font-bold text-xl hover:bg-gray-100"
+              onClick={() => setProduitSelectionne(null)}
+            >
+              ✕
+            </button>
+            <div className="grid md:grid-cols-2">
+              <div className="aspect-square bg-gray-100">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={produitSelectionne.imageUrl} alt={produitSelectionne.title} className="w-full h-full object-cover" />
+              </div>
+              <div className="p-8 space-y-6">
+                <div className="space-y-2">
+                  <span className="text-xs font-bold uppercase tracking-widest text-[#ff7a18]">{produitSelectionne.category}</span>
+                  <h2 className="text-4xl font-bold text-[#111827]">{produitSelectionne.title}</h2>
+                  <p className="text-3xl font-bold text-[#111827]">{formatPriceMad(produitSelectionne.price)}</p>
+                </div>
+                <p className="text-[#4b5563] leading-relaxed">{produitSelectionne.description}</p>
+                
+                <div className="space-y-2">
+                  <p className="text-sm font-bold text-[#111827]">Caractéristiques :</p>
+                  <ul className="grid grid-cols-2 gap-2">
+                    {produitSelectionne.specs?.map((s) => (
+                      <li key={s} className="text-sm text-[#6b7280] flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full bg-orange-400"></span>
+                        {s}
+                      </li>
+                    ))}
+                    <li className="text-sm text-[#6b7280] flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 rounded-full bg-orange-400"></span>
+                      Stock : {produitSelectionne.stock} {produitSelectionne.unit}
+                    </li>
+                  </ul>
                 </div>
 
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <span className="chip">{selectedProduct.category}</span>
-                    {selectedProduct.featured ? <span className="chip">Vedette</span> : null}
-                  </div>
-                  <h3 className="font-display text-3xl font-bold text-[#1a2433]">{selectedProduct.title}</h3>
-                  <p className="text-sm text-[#5d5448]">{selectedProduct.description}</p>
-
-                  <div className="rounded-xl border border-[#d7cebf] bg-[#f8f2e7] p-3">
-                    <p className="text-xs uppercase tracking-[0.12em] text-[#7f725e]">Prix</p>
-                    <p className="font-display text-3xl font-bold text-[#c46a00]">{formatPriceMad(selectedProduct.price)}</p>
-                  </div>
-
-                  {selectedProduct.specs?.length ? (
-                    <div className="rounded-xl border border-[#e2d8c8] bg-white p-3">
-                      <p className="text-xs uppercase tracking-[0.12em] text-[#7f725e]">Caracteristiques</p>
-                      <ul className="mt-2 space-y-1 text-sm text-[#4f463a]">
-                        {selectedProduct.specs.map((spec) => (
-                          <li key={`${selectedProduct._id}-${spec}`}>- {spec}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  ) : null}
-
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <button className="btn btn-primary" type="button" onClick={() => addToCart(selectedProduct._id)}>
-                      Ajouter au panier
-                    </button>
-                    <button className="btn btn-ghost" type="button" onClick={closeProductDetails}>
-                      Retour
-                    </button>
-                  </div>
+                <div className="pt-4 flex gap-4">
+                  <button 
+                    className="btn btn-primary flex-1 py-4 text-lg"
+                    onClick={() => {
+                      ajouterAuPanier(produitSelectionne._id);
+                      setProduitSelectionne(null);
+                    }}
+                  >
+                    Ajouter au Panier
+                  </button>
                 </div>
               </div>
             </div>
           </div>
-        ) : null}
-
-        {/* Historique commandes utilisateur */}
-        <section className="panel p-5">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-2xl font-bold">Mes commandes</h2>
-            <span className="chip">{orders.length} commandes</span>
-          </div>
-
-          {!session ? (
-            <p className="mt-4 text-sm text-[#5d5448]">Connectez-vous pour voir vos commandes.</p>
-          ) : orders.length === 0 ? (
-            <p className="mt-4 text-sm text-[#5d5448]">Aucune commande pour le moment.</p>
-          ) : (
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {orders.map((order) => (
-                <div key={order._id} className="rounded-xl border border-[#d7cebf] bg-white p-3">
-                  <p className="text-sm text-[#5d5448]">Statut: {getOrderStatusLabel(order.status)}</p>
-                  <p className="font-semibold text-[#0f172a]">Total: {formatPriceMad(order.totalAmount)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </main>
+        </div>
+      )}
     </>
   );
 }

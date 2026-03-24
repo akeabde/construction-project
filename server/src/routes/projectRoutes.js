@@ -6,90 +6,91 @@ const { PROJECT_REQUEST_STATUSES } = require("../constants/projectRequestStatus"
 
 const router = express.Router();
 
-// Nettoyer une valeur texte.
-const cleanText = (value) => String(value || "").trim();
+// --- FONCTIONS D'AIDE (HELPERS) ---
 
-// Lire les champs d une demande projet.
-const readProjectPayload = (body) => {
-  return {
-    fullName: cleanText(body.fullName),
-    phone: cleanText(body.phone),
-    city: cleanText(body.city),
-    serviceType: cleanText(body.serviceType),
-    budget: cleanText(body.budget),
-    notes: cleanText(body.notes),
-  };
+// 1) Nettoyer un texte simple.
+const nettoyerTexte = (valeur) => {
+  return String(valeur || "").trim();
 };
 
-// Verifier les champs obligatoires.
-const isProjectPayloadValid = (payload) => {
-  if (!payload.fullName) return false;
-  if (!payload.phone) return false;
-  if (!payload.city) return false;
-  if (!payload.serviceType) return false;
-  return true;
+// 2) Vérifier si les informations de la demande sont complètes.
+const verifierDemandeProjet = (donnees) => {
+  if (!donnees.fullName) return false;    // Nom manquant ?
+  if (!donnees.phone) return false;       // Téléphone manquant ?
+  if (!donnees.city) return false;        // Ville manquante ?
+  if (!donnees.serviceType) return false; // Type de service manquant ?
+  return true; // Tout est bon !
 };
+
+// --- ROUTES ---
 
 // ============================================================
-// ROUTE : DEMANDER UN PROJET (POST /api/projects)
-// Action : Enregistre une demande de devis ou d'aide.
+// ROUTE : DEMANDER UN PROJET / DEVIS (POST /api/projects)
+// Action : Enregistre une nouvelle demande de travaux.
 // ============================================================
 router.post("/", checkAuth, async (req, res) => {
   try {
-    // 1) On prépare les données du formulaire.
-    const payload = readProjectPayload(req.body);
+    // 1) On prépare les données envoyées dans le formulaire.
+    const nouvellesDonnees = {
+      fullName: nettoyerTexte(req.body.fullName),
+      phone: nettoyerTexte(req.body.phone),
+      city: nettoyerTexte(req.body.city),
+      serviceType: nettoyerTexte(req.body.serviceType),
+      budget: nettoyerTexte(req.body.budget),
+      notes: nettoyerTexte(req.body.notes)
+    };
 
-    // 2) Vérification des champs indispensables (Nom, Tel, Ville, Service).
-    if (!isProjectPayloadValid(payload)) {
-      return res.status(400).json({ message: "Veuillez remplir tous les champs obligatoires." });
+    // 2) On vérifie si les informations obligatoires sont présentes.
+    if (verifierDemandeProjet(nouvellesDonnees) === false) {
+      return res.status(400).json({ message: "Veuillez remplir les champs obligatoires (Nom, Tél, Ville, Service)." });
     }
 
-    // 3) Sauvegarde dans MongoDB.
-    const request = await ProjectRequest.create(payload);
-    return res.status(201).json(request);
-  } catch (error) {
-    console.error("Erreur demande projet:", error);
-    return res.status(500).json({ message: "Impossible d'envoyer votre demande." });
+    // 3) On enregistre dans la base de données.
+    const nouvelleDemande = await ProjectRequest.create(nouvellesDonnees);
+    
+    // 4) Succès !
+    return res.status(201).json(nouvelleDemande);
+
+  } catch (erreur) {
+    console.error("Erreur demande projet:", erreur);
+    return res.status(500).json({ message: "Impossible d'envoyer votre demande pour le moment." });
   }
 });
 
-// GET /api/projects
-// Retourner toutes les demandes (admin).
-router.get("/", checkAuth, checkAdmin, async (_req, res) => {
+// ============================================================
+// ROUTE : VOIR TOUTES LES DEMANDES (GET /api/projects) - ADMIN
+// ============================================================
+router.get("/", checkAuth, checkAdmin, async (req, res) => {
   try {
-    const requests = await ProjectRequest.find().sort({ createdAt: -1 });
-    return res.json(requests);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not load project requests" });
+    // On récupère toutes les demandes, triées par date (récentes en premier).
+    const toutesLesDemandes = await ProjectRequest.find().sort({ createdAt: -1 });
+    return res.json(toutesLesDemandes);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Erreur lors du chargement des demandes." });
   }
 });
 
-// PATCH /api/projects/:id/status
-// Changer le statut d une demande (admin).
+// ============================================================
+// ROUTE : CHANGER LE STATUT (PATCH /api/projects/:id/status) - ADMIN
+// ============================================================
 router.patch("/:id/status", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // 1) Lire le nouveau statut.
-    const status = req.body.status;
+    const identifiant = req.params.id;
+    const nouveauStatut = req.body.status;
 
-    // 2) Verifier que le statut est autorise.
-    if (!PROJECT_REQUEST_STATUSES.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
+    // On vérifie si l'ID est correct dans l'URL.
+    const demandeAModifier = await ProjectRequest.findById(identifiant);
+    if (!demandeAModifier) {
+      return res.status(404).json({ message: "Demande introuvable." });
     }
 
-    // 3) Mettre a jour la demande.
-    const request = await ProjectRequest.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true, runValidators: true }
-    );
+    // On met à jour uniquement le statut.
+    demandeAModifier.status = nouveauStatut;
+    await demandeAModifier.save();
 
-    if (!request) {
-      return res.status(404).json({ message: "Request not found" });
-    }
-
-    return res.json(request);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not update request status" });
+    return res.json(demandeAModifier);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Échec de la mise à jour du statut." });
   }
 });
 

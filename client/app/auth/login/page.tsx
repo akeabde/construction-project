@@ -5,102 +5,133 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 
 import SiteHeader from "@/components/site-header";
-import { apiRequest } from "@/lib/api";
-import { loadSession, saveSession } from "@/lib/session";
+import { appelAPI } from "@/lib/api";
+import { chargerSession, enregistrerSession } from "@/lib/session";
 import type { Session } from "@/lib/types";
-import { getErrorMessage } from "@/lib/ui";
 
-// Reponse attendue de l API login.
-type AuthResponse = Session;
-
+// ============================================================
+// PAGE : CONNEXION (Login)
+// Role : Permet à l'utilisateur de se connecter à son compte.
+// ============================================================
 export default function LoginPage() {
-  // Router pour redirection apres login.
   const router = useRouter();
 
-  // Champs formulaire login.
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  // --- VARIABLES D'ÉTAT (STATE) ---
+  const [emailSaisi, setEmailSaisi] = useState("");
+  const [motDePasseSaisi, setMotDePasseSaisi] = useState("");
+  
+  const [messageErreur, setMessageErreur] = useState("");
+  const [enCoursDeChargement, setEnCoursDeChargement] = useState(false);
 
-  // Etats UI.
-  const [errorMessage, setErrorMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Si deja connecte, on redirige directement.
+  // --- SÉCURITÉ : Redirection si déjà connecté ---
   useEffect(() => {
-    const savedSession = loadSession();
-    if (!savedSession) {
-      return;
+    const sessionActuelle = chargerSession();
+    if (sessionActuelle) {
+      // Si on est déjà connecté, on n'a rien à faire ici.
+      if (sessionActuelle.user.role === "admin") {
+        router.replace("/dashboard/admin"); // Go vers Administration.
+      } else {
+        router.replace("/"); // Go vers l'Accueil.
+      }
     }
-
-    if (savedSession.user.role === "admin") {
-      router.replace("/dashboard/admin");
-      return;
-    }
-
-    router.replace("/");
   }, [router]);
 
-  // Envoi du formulaire login.
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsSubmitting(true);
+  // --- ACTION : ENVOYER LE FORMULAIRE ---
+  const gererConnexion = async (evenement: FormEvent<HTMLFormElement>) => {
+    evenement.preventDefault(); // Empêche la page de se recharger.
+    
+    setMessageErreur("");
+    setEnCoursDeChargement(true);
 
     try {
-      // Appel API login.
-      const session = await apiRequest<AuthResponse>("/auth/login", {
+      // 1) On appelle notre backend pour vérifier les identifiants.
+      const sessionRecue = await appelAPI<Session>("/auth/login", {
         method: "POST",
-        body: { email, password },
+        body: { 
+          email: emailSaisi, 
+          password: motDePasseSaisi 
+        }
       });
 
-      // Sauvegarder session dans localStorage.
-      saveSession(session);
+      // 2) On enregistre les infos dans le navigateur (LocalStorage).
+      enregistrerSession(sessionRecue);
 
-      // Rediriger selon role.
-      if (session.user.role === "admin") {
+      // 3) On redirige selon le rôle.
+      if (sessionRecue.user.role === "admin") {
         router.push("/dashboard/admin");
       } else {
         router.push("/");
       }
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error, "Connexion echouee"));
+
+    } catch (erreur: any) {
+      // Si le serveur dit non (Mauvais mot de passe, etc.).
+      setMessageErreur(erreur.message || "Impossible de se connecter.");
     } finally {
-      setIsSubmitting(false);
+      setEnCoursDeChargement(false);
     }
   };
 
   return (
     <>
       <SiteHeader />
-      <main className="shell flex min-h-screen items-center justify-center py-10">
-        <section className="panel w-full max-w-md space-y-5 p-7">
-          <div className="space-y-1">
-            <p className="chip inline-flex">Bon retour</p>
-            <h1 className="font-display text-3xl font-bold text-[#0f172a]">Connexion</h1>
-            <p className="text-sm text-[#5d5448]">Connectez-vous pour commander des produits.</p>
+      
+      <main className="shell flex min-h-[80vh] items-center justify-center py-10">
+        <section className="panel w-full max-w-md space-y-6 p-8">
+          
+          <div className="text-center space-y-2">
+            <h1 className="font-display text-4xl font-bold text-[#1a1a1a]">Connexion</h1>
+            <p className="text-[#6b7280]">Accédez à votre espace pour commander.</p>
           </div>
 
-          <form className="space-y-3" onSubmit={handleSubmit}>
-            <input type="email" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} required />
-            <input
-              type="password"
-              placeholder="Mot de passe"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-            <button type="submit" className="btn btn-primary w-full" disabled={isSubmitting}>
-              {isSubmitting ? "Connexion..." : "Se connecter"}
+          <form className="space-y-4" onSubmit={gererConnexion}>
+            {/* Champ Email */}
+            <div className="space-y-1">
+              <label className="text-sm font-semibold text-[#374151]">Adresse Email</label>
+              <input 
+                type="email" 
+                placeholder="Ex: ali@gmail.com" 
+                value={emailSaisi} 
+                onChange={(e) => setEmailSaisi(e.target.value)} 
+                required 
+              />
+            </div>
+
+            {/* Champ Mot de passe */}
+            <div className="space-y-1">
+              <label className="text-sm font-semibold text-[#374151]">Mot de passe</label>
+              <input 
+                type="password" 
+                placeholder="Votre mot de passe secret" 
+                value={motDePasseSaisi} 
+                onChange={(e) => setMotDePasseSaisi(e.target.value)} 
+                required 
+              />
+            </div>
+
+            {/* Bouton de validation */}
+            <button 
+              type="submit" 
+              className="btn btn-primary w-full py-3" 
+              disabled={enCoursDeChargement}
+            >
+              {enCoursDeChargement ? "Vérification..." : "Se connecter"}
             </button>
-            {errorMessage ? <p className="text-sm text-red-600">{errorMessage}</p> : null}
+
+            {/* Affichage de l'erreur si elle existe */}
+            {messageErreur && (
+              <p className="text-center text-sm font-medium text-[#ef4444] bg-[#fee2e2] p-2 rounded-md">
+                {messageErreur}
+              </p>
+            )}
           </form>
 
-          <div className="text-sm text-[#5d5448]">
-            Pas encore de compte ?{" "}
-            <Link href="/auth/register" className="font-semibold text-[#c46a00]">
-              Creer un compte
+          <div className="pt-4 border-t border-[#e5e7eb] text-center text-sm text-[#4b5563]">
+            Vous n'avez pas de compte ?{" "}
+            <Link href="/auth/register" className="font-bold text-[#ff7a18] hover:underline">
+              S'inscrire gratuitement
             </Link>
           </div>
+
         </section>
       </main>
     </>

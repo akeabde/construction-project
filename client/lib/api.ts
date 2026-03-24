@@ -1,56 +1,60 @@
-// URL de base de l'API. Si on est sur ngrok/prod, on utilise /api (piloté par Nginx).
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
+// L'URL de base du serveur API. 
+// "/api" signifie qu'on utilise le proxy Nginx (Port 80).
+const URL_DU_SERVEUR = process.env.NEXT_PUBLIC_API_URL || "/api";
 
-type RequestOptions = {
-  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
-  token?: string; // Jeton JWT pour les routes protégées (ex: admin).
-  body?: unknown; // Données à envoyer (pour POST/PUT).
+// --- STRUCTURE DES OPTIONS ---
+type OptionsDeLaRequete = {
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; // Le type d'action (Défaut: GET)
+  token?: string; // Le badge de connexion (Standard JWT)
+  body?: unknown; // Les données à envoyer (ex: Formulaire)
 };
 
-// --- EXTRAIRE LES ERREURS ---
-// Petite fonction pour lire le message d'erreur renvoyé par le serveur Node.js.
-const getApiErrorMessage = (payload: unknown, fallback: string) => {
-  if (payload && typeof payload === "object" && "message" in payload) {
-    const message = (payload as { message?: unknown }).message;
-    if (typeof message === "string") {
-      return message;
-    }
+// --- FONCTION : LIRE L'ERREUR ---
+// Sert à transformer une erreur complexe en texte simple compréhensible.
+const extraireMessageErreur = (donneesRecues: any, texteParDefaut: string) => {
+  if (donneesRecues && donneesRecues.message) {
+    return String(donneesRecues.message);
   }
-  return fallback;
+  return texteParDefaut; // Si on ne trouve pas de message précis.
 };
 
-// --- FONCTION PRINCIPALE APPEL API ---
-// C'est ici que tous les appels vers le serveur sont centralisés.
-export const apiRequest = async <T>(path: string, options: RequestOptions = {}): Promise<T> => {
-  // DEBUG : Voir l'URL exacte dans la console du navigateur (F12).
-  const finalUrl = `${API_URL}${path}`;
-  console.log(`[Requete API] vers : ${finalUrl}`);
+// --- FONCTION PRINCIPALE : APPEL API ---
+// C'est la "boîte aux lettres" du frontend pour parler au backend.
+export const appelAPI = async <Resultat>(chemin: string, options: OptionsDeLaRequete = {}): Promise<Resultat> => {
+  
+  // 1) On prépare l'adresse complète (URL).
+  const adresseComplete = `${URL_DU_SERVEUR}${chemin}`;
+  console.log(`[Frontend] Vers le serveur : ${adresseComplete}`);
 
-  // Utilisation de la fonction standard 'fetch' du navigateur.
-  const response = await fetch(finalUrl, {
+  // 2) On prépare la "Feuille de demande" (Request Headers).
+  const configuration = {
     method: options.method || "GET",
     headers: {
       "Content-Type": "application/json",
-      // Si on a un token, on l'ajoute dans le header Authorization (Standard JWT).
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      // Si on a un jeton de connexion, on l'ajoute.
+      ...(options.token ? { "Authorization": `Bearer ${options.token}` } : {})
     },
-    // On transforme l'objet JS en texte JSON pour le serveur.
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+    // On transforme les données JS en texte JSON.
+    body: options.body ? JSON.stringify(options.body) : undefined
+  };
 
-  // Tenter de lire la réponse (elle doit être en JSON).
-  let payload: unknown = null;
+  // 3) On envoie la demande au serveur avec 'fetch'.
+  const reponseDuServeur = await fetch(adresseComplete, configuration);
+
+  // 4) On essaie de lire les données reçues (JSON).
+  let donnees: any = null;
   try {
-    payload = await response.json();
-  } catch {
-    payload = null;
+    donnees = await reponseDuServeur.json();
+  } catch (erreurLecture) {
+    donnees = null;
   }
 
-  // Si le serveur répond avec une erreur (ex: 401, 404, 500).
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload, "La requête a échoué"));
+  // 5) Si le serveur renvoie une erreur (Bug ou Inscription ratée).
+  if (reponseDuServeur.ok === false) {
+    const messageFinal = extraireMessageErreur(donnees, "Désolé, la demande a échoué.");
+    throw new Error(messageFinal);
   }
 
-  // On retourne les données reçues.
-  return payload as T;
+  // 6) On renvoie le résultat final.
+  return donnees as Resultat;
 };

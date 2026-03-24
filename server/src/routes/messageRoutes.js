@@ -5,148 +5,147 @@ const { checkAuth, checkAdmin } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Nettoyer une valeur texte.
-const cleanText = (value) => String(value || "").trim();
+// --- FONCTION D'AIDE (HELPER) ---
 
-// Verifier si l utilisateur courant peut supprimer un message.
-const canDeleteMessage = (message, user) => {
-  // 1) Admin peut toujours supprimer.
-  const isAdmin = user.role === "admin";
-  if (isAdmin) {
+// 1) Vérifier si l'utilisateur a le droit de supprimer ce message.
+const verifierDroitSuppression = (messageAtester, utilisateurConnecte) => {
+  // L'administrateur peut tout supprimer.
+  if (utilisateurConnecte.role === "admin") {
     return true;
   }
 
-  // 2) Proprietaire via user id.
-  const isOwnerById = message.user && String(message.user) === String(user.id);
-  if (isOwnerById) {
+  // Si l'utilisateur est celui qui a envoyé le message (via son ID).
+  if (String(messageAtester.user) === String(utilisateurConnecte.id)) {
     return true;
   }
 
-  // 3) Proprietaire via email (fallback).
-  const userEmail = cleanText(user.email).toLowerCase();
-  const isOwnerByEmail = message.email === userEmail;
-  if (isOwnerByEmail) {
-    return true;
-  }
-
+  // Par défaut, on refuse.
   return false;
 };
 
+// --- ROUTES ---
+
 // ============================================================
-// ROUTE : ENVOYER UN MESSAGE (POST /api/messages)
-// Action : Sauvegarde un message de contact dans la base.
+// ROUTE : ENVOYER UN MESSAGE DE CONTACT (POST /api/messages)
+// Action : Enregistre une question ou un message dans la base.
 // ============================================================
 router.post("/", checkAuth, async (req, res) => {
   try {
-    // 1) On utilise les infos de l'utilisateur déjà connecté.
-    const name = cleanText(req.user.name);
-    const email = cleanText(req.user.email).toLowerCase();
-    const phone = cleanText(req.body.phone);
-    const subject = cleanText(req.body.subject);
-    const message = cleanText(req.body.message);
+    // 1) On récupère les infos de l'utilisateur connecté.
+    const nomExpediteur = req.user.name;
+    const emailExpediteur = req.user.email;
+    const telephone = String(req.body.phone || "").trim();
+    const sujetDuMessage = String(req.body.subject || "").trim();
+    const texteDuMessage = String(req.body.message || "").trim();
 
-    // 2) Le corps du message est obligatoire.
-    if (!message) {
-      return res.status(400).json({ message: "Le message ne peut pas être vide." });
+    // 2) On vérifie que le message n'est pas vide.
+    if (!texteDuMessage) {
+      return res.status(400).json({ message: "S'il vous plaît, écrivez un message avant d'envoyer." });
     }
 
-    // 3) Création du message de contact.
-    const newMessage = await ContactMessage.create({
+    // 3) On crée l'enregistrement dans MongoDB.
+    const nouveauMessage = await ContactMessage.create({
       user: req.user.id,
-      name,
-      email,
-      phone,
-      subject,
-      message,
+      name: nomExpediteur,
+      email: emailExpediteur,
+      phone: telephone,
+      subject: sujetDuMessage,
+      message: texteDuMessage
     });
 
-    return res.status(201).json(newMessage);
-  } catch (error) {
-    console.error("Erreur message contact:", error);
-    return res.status(500).json({ message: "Impossible d'envoyer le message." });
+    return res.status(201).json(nouveauMessage);
+
+  } catch (erreur) {
+    console.error("Erreur message contact:", erreur);
+    return res.status(500).json({ message: "Échec de l'envoi du message." });
   }
 });
 
-// GET /api/messages/mine
-// Retourner les messages du client connecte.
+// ============================================================
+// ROUTE : VOIR MES MESSAGES (GET /api/messages/mine)
+// ============================================================
 router.get("/mine", checkAuth, async (req, res) => {
   try {
-    const userEmail = cleanText(req.user.email).toLowerCase();
-
-    const messages = await ContactMessage.find({
-      $or: [{ user: req.user.id }, { email: userEmail }],
-    }).sort({ createdAt: -1 });
-
-    return res.json(messages);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not load your messages" });
+    // On cherche tous les messages envoyés par cet utilisateur.
+    const mesMessages = await ContactMessage.find({ user: req.user.id }).sort({ createdAt: -1 });
+    
+    return res.json(mesMessages);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Impossible de charger vos messages." });
   }
 });
 
-// GET /api/messages
-// Retourner toutes les conversations (admin).
-router.get("/", checkAuth, checkAdmin, async (_req, res) => {
+// ============================================================
+// ROUTE : VOIR TOUS LES MESSAGES (GET /api/messages) - ADMIN
+// ============================================================
+router.get("/", checkAuth, checkAdmin, async (req, res) => {
   try {
-    const messages = await ContactMessage.find().sort({ createdAt: -1 });
-    return res.json(messages);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not load messages" });
+    // L'admin récupère tout pour pouvoir répondre.
+    const tousLesMessages = await ContactMessage.find().sort({ createdAt: -1 });
+    return res.json(tousLesMessages);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Erreur lors du chargement des messages admin." });
   }
 });
 
-// PATCH /api/messages/:id/reply
-// Envoyer une reponse admin.
+// ============================================================
+// ROUTE : RÉPONDRE À UN MESSAGE (PATCH /api/messages/:id/reply) - ADMIN
+// ============================================================
 router.patch("/:id/reply", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // 1) Lire la reponse admin.
-    const adminReply = cleanText(req.body.reply);
+    const identifiant = req.params.id;
+    const reponseDeLAdmin = String(req.body.reply || "").trim();
 
-    // 2) Verifier champ obligatoire.
-    if (!adminReply) {
-      return res.status(400).json({ message: "reply is required" });
+    if (!reponseDeLAdmin) {
+      return res.status(400).json({ message: "La réponse ne peut pas être vide." });
     }
 
-    // 3) Mettre a jour la conversation.
-    const message = await ContactMessage.findByIdAndUpdate(
-      req.params.id,
+    // On met à jour le message avec la réponse de l'admin.
+    const messageMisAJour = await ContactMessage.findByIdAndUpdate(
+      identifiant,
       {
-        adminReply,
-        status: "replied",
-        repliedAt: new Date(),
+        adminReply: reponseDeLAdmin,
+        status: "replied", // Statut : "Répondu"
+        repliedAt: new Date()
       },
-      { new: true, runValidators: true }
+      { new: true }
     );
 
-    if (!message) {
-      return res.status(404).json({ message: "Message not found" });
+    if (!messageMisAJour) {
+      return res.status(404).json({ message: "Message introuvable." });
     }
 
-    return res.json(message);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not send reply" });
+    return res.json(messageMisAJour);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Erreur lors de l'envoi de la réponse." });
   }
 });
 
-// DELETE /api/messages/:id
-// Supprimer une conversation (admin ou proprietaire).
+// ============================================================
+// ROUTE : SUPPRIMER UN MESSAGE (DELETE /api/messages/:id)
+// ============================================================
 router.delete("/:id", checkAuth, async (req, res) => {
   try {
-    // 1) Charger le message.
-    const message = await ContactMessage.findById(req.params.id);
-    if (!message) {
-      return res.status(404).json({ message: "Message not found" });
+    const identifiant = req.params.id;
+    
+    // 1) On cherche le message.
+    const messageTrouve = await ContactMessage.findById(identifiant);
+    
+    if (!messageTrouve) {
+      return res.status(404).json({ message: "Message introuvable." });
     }
 
-    // 2) Verifier le droit de suppression.
-    if (!canDeleteMessage(message, req.user)) {
-      return res.status(403).json({ message: "Forbidden" });
+    // 2) On vérifie si l'utilisateur a le droit (Lui-même ou Admin).
+    if (verifierDroitSuppression(messageTrouve, req.user) === false) {
+      return res.status(403).json({ message: "Vous n'avez pas le droit de supprimer ce message." });
     }
 
-    // 3) Supprimer.
-    await ContactMessage.findByIdAndDelete(req.params.id);
-    return res.json({ message: "Message deleted" });
-  } catch (error) {
-    return res.status(500).json({ message: "Could not delete message" });
+    // 3) On supprime.
+    await ContactMessage.findByIdAndDelete(identifiant);
+    
+    return res.json({ message: "Message supprimé avec succès." });
+  } catch (erreur) {
+    return res.status(500).json({ message: "Échec de la suppression." });
   }
 });
 
