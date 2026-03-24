@@ -1,6 +1,16 @@
 # 👷 FIKHI CONSTRUCTION - Full-Stack App
 
-Ce projet est une application de gestion (Produits, Commandes, Clients) conçue pour être **simple, robuste et facile à déployer**. Idéal pour un développeur avec ~6 mois d'expérience.
+Ce projet est une solution complète de gestion pour les entreprises de construction, permettant de gérer le catalogue de produits, les commandes clients et les demandes de projets via une interface moderne et performante.
+
+---
+
+## 🌟 Concept & Services
+
+L'application **FIKHI CONSTRUCTION** propose trois piliers de services :
+
+1.  **Vente de Matériaux** : Un catalogue complet avec gestion des stocks en temps réel et panier d'achat.
+2.  **Gestion de Commandes** : Un flux simplifié pour les clients et un tableau de bord complet pour l'administration.
+3.  **Demandes de Projets** : Un module permettant aux clients de soumettre des demandes de devis ou de travaux personnalisés.
 
 ---
 
@@ -61,4 +71,4 @@ Par sécurité, les identifiants ne sont pas écrits en clair ici. Vous pouvez l
 
 ## 👨‍💻 Note pour le Développeur
 
-Le code a été simplifié et **commenté en français** dans les fichiers les plus importants (`api.ts`, `session.ts`, `authRoutes.js`, `productRoutes.js`) pour faciliter la relecture et la modification.
+Le code source est structuré de manière propre et **entièrement documenté en français** pour faciliter la maintenance et les évolutions futures.
