@@ -32,34 +32,38 @@ const createToken = (user) => {
   );
 };
 
-// Route inscription.
+// ============================================================
+// ROUTE : INSCRIPTION (REGISTER)
+// Action : Crée un nouvel utilisateur.
+// ============================================================
 router.post("/register", async (req, res) => {
   try {
-    // 1) Lire champs.
+    // 1) Lire et nettoyer les champs du formulaire.
     const name = cleanText(req.body.name);
     const email = cleanEmail(req.body.email);
     const password = String(req.body.password || "");
 
-    // 2) Verifier champs obligatoires.
+    // 2) Vérifier que tout est rempli.
     if (!name || !email || !password) {
-      return res.status(400).json({ message: "name, email and password are required" });
+      return res.status(400).json({ message: "Le nom, l'email et le mot de passe sont obligatoires." });
     }
 
-    // 3) Verifier longueur mot de passe.
+    // 3) Le mot de passe doit être assez long (sécurité).
     if (password.length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters" });
+      return res.status(400).json({ message: "Le mot de passe doit faire au moins 6 caractères." });
     }
 
-    // 4) Verifier email deja utilise.
+    // 4) Vérifier si cet email appartient déjà à quelqu'un.
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res.status(409).json({ message: "Email already in use" });
+      return res.status(409).json({ message: "Cet email est déjà utilisé." });
     }
 
-    // 5) Hasher mot de passe.
+    // 5) Sécurité : On ne stocke JAMAIS le mot de passe en clair.
+    // On utilise bcrypt pour le transformer en charabia (hash).
     const passwordHash = await bcrypt.hash(password, 10);
 
-    // 6) Creer utilisateur.
+    // 6) Enregistrement dans MongoDB.
     const user = await User.create({
       name,
       email,
@@ -67,10 +71,10 @@ router.post("/register", async (req, res) => {
       role: "user",
     });
 
-    // 7) Creer token JWT.
+    // 7) On connecte l'utilisateur tout de suite en créant un jeton JWT.
     const token = createToken(user);
 
-    // 8) Retourner session.
+    // 8) Succès ! On renvoie la session (token + infos utilisateur).
     return res.status(201).json({
       token,
       user: {
@@ -81,38 +85,42 @@ router.post("/register", async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({ message: "Could not register user" });
+    console.error("Erreur inscription:", error);
+    return res.status(500).json({ message: "Erreur lors de l'inscription." });
   }
 });
 
-// Route connexion.
+// ============================================================
+// ROUTE : CONNEXION (LOGIN)
+// Action : Vérifie les identifiants et connecte l'utilisateur.
+// ============================================================
 router.post("/login", async (req, res) => {
   try {
-    // 1) Lire champs.
+    // 1) Lire les identifiants.
     const email = cleanEmail(req.body.email);
     const password = String(req.body.password || "");
 
-    // 2) Verifier champs obligatoires.
     if (!email || !password) {
-      return res.status(400).json({ message: "email and password are required" });
+      return res.status(400).json({ message: "Email et mot de passe requis." });
     }
 
-    // 3) Chercher utilisateur.
+    // 2) Chercher l'utilisateur par son email.
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      // Pour la sécurité, on reste vague sur l'erreur (Identifiants invalides).
+      return res.status(401).json({ message: "Identifiants invalides." });
     }
 
-    // 4) Comparer mot de passe.
+    // 3) Comparer le mot de passe saisi avec celui (hashé) de la base.
     const passwordMatches = await bcrypt.compare(password, user.passwordHash);
     if (!passwordMatches) {
-      return res.status(401).json({ message: "Invalid credentials" });
+      return res.status(401).json({ message: "Identifiants invalides." });
     }
 
-    // 5) Creer token.
+    // 4) Créer un jeton JWT (la clé de l'utilisateur).
     const token = createToken(user);
 
-    // 6) Retourner session.
+    // 5) Renvoyer la session.
     return res.json({
       token,
       user: {
@@ -123,7 +131,8 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({ message: "Could not login user" });
+    console.error("Erreur connexion:", error);
+    return res.status(500).json({ message: "Erreur lors de la connexion." });
   }
 });
 

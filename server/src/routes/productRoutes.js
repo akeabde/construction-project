@@ -102,42 +102,49 @@ const isProductPayloadValid = (payload) => {
   return true;
 };
 
+// ============================================================
 // GET /api/products
-// Retourne la liste des produits (route publique).
+// Action: Recupere la liste de tous les produits.
+// Public: Oui (tout le monde peut voir les produits).
+// ============================================================
 router.get("/", async (req, res) => {
   try {
-    // Lire les filtres optionnels.
+    // 1. Lire les filtres envoyes dans l'URL (ex: ?category=tools).
     const search = cleanText(req.query.search);
     const category = cleanText(req.query.category);
     const featured = cleanText(req.query.featured);
 
-    // Construire la requete Mongo pas a pas.
+    // 2. Preparer l'objet de recherche pour MongoDB.
     const query = {};
 
-    // Recherche texte simple dans plusieurs champs.
+    // Si l'utilisateur a ecrit quelque chose dans la barre de recherche.
     if (search) {
       query.$or = [
-        { title: { $regex: search, $options: "i" } },
+        { title: { $regex: search, $options: "i" } }, // "i" veut dire insensible a la casse (Majuscule/Minuscule).
         { description: { $regex: search, $options: "i" } },
         { category: { $regex: search, $options: "i" } },
       ];
     }
 
-    // Filtrer par categorie (sauf "all").
+    // Filtrer par categorie si ce n'est pas "all".
     if (category && category !== "all") {
       query.category = category;
     }
 
-    // Filtrer les produits mis en avant.
+    // Filtrer les produits "Coups de coeur" (featured).
     if (featured === "true") {
       query.featured = true;
     }
 
-    // Charger les produits du plus recent au plus ancien.
+    // 3. Chercher dans la base de donnees et trier par date (le plus recent en premier).
     const products = await Product.find(query).sort({ createdAt: -1 });
+
+    // 4. Renvoyer les donnees au format JSON.
     return res.json(products);
   } catch (error) {
-    return res.status(500).json({ message: "Could not load products" });
+    // En cas de gros probleme technique (serveur/base de donnees).
+    console.error("Erreur chargement produits:", error);
+    return res.status(500).json({ message: "Impossible de charger les produits" });
   }
 });
 
@@ -158,23 +165,29 @@ router.get("/:id", async (req, res) => {
   }
 });
 
+// ============================================================
 // POST /api/products
-// Creer un nouveau produit (admin uniquement).
+// Action: Creer un nouveau produit.
+// Restriction: Admin uniquement (verifie par checkAuth et checkAdmin).
+// ============================================================
 router.post("/", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // Lire et nettoyer les champs.
+    // 1. On prepare les donnees recues depuis le formulaire.
     const payload = readProductPayload(req.body);
 
-    // Verifier champs obligatoires.
+    // 2. On verifie que les champs obligatoires sont la.
     if (!isProductPayloadValid(payload)) {
-      return res.status(400).json({ message: "title, description, price, imageUrl and category are required" });
+      return res.status(400).json({ message: "Le titre, la description, le prix et la categorie sont obligatoires." });
     }
 
-    // Creer produit en base.
+    // 3. Sauvegarder dans MongoDB.
     const product = await Product.create(payload);
+
+    // 4. Succes ! On renvoie le produit cree avec le code 201 (Created).
     return res.status(201).json(product);
   } catch (error) {
-    return res.status(500).json({ message: "Could not create product" });
+    console.error("Erreur creation produit:", error);
+    return res.status(500).json({ message: "Impossible de creer le produit" });
   }
 });
 

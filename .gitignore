@@ -1,8 +1,33 @@
-node_modules/
-server/node_modules/
-client/node_modules/
-.next/
-client/.next/
+# Fichiers d'environnement (Secrets)
 .env
-server/.env
-client/.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dépendances
+node_modules/
+/client/node_modules
+/server/node_modules
+
+# Build et Cache
+.next/
+out/
+build/
+dist/
+.cache/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.dockerignore
+# NOTE: docker-compose.yml est généralement partagé, mais sans les secrets (utilisez .env)
+
+# Données locales (MongoDB)
+mongodb_data/
+
+# Divers
+.DS_Store
+Thumbs.db
+.gemini/

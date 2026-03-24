@@ -30,23 +30,26 @@ const isProjectPayloadValid = (payload) => {
   return true;
 };
 
-// POST /api/projects
-// Creer une nouvelle demande de projet.
+// ============================================================
+// ROUTE : DEMANDER UN PROJET (POST /api/projects)
+// Action : Enregistre une demande de devis ou d'aide.
+// ============================================================
 router.post("/", checkAuth, async (req, res) => {
   try {
-    // 1) Lire et nettoyer les champs.
+    // 1) On prépare les données du formulaire.
     const payload = readProjectPayload(req.body);
 
-    // 2) Verifier les champs obligatoires.
+    // 2) Vérification des champs indispensables (Nom, Tel, Ville, Service).
     if (!isProjectPayloadValid(payload)) {
-      return res.status(400).json({ message: "fullName, phone, city and serviceType are required" });
+      return res.status(400).json({ message: "Veuillez remplir tous les champs obligatoires." });
     }
 
-    // 3) Sauvegarder la demande.
+    // 3) Sauvegarde dans MongoDB.
     const request = await ProjectRequest.create(payload);
     return res.status(201).json(request);
   } catch (error) {
-    return res.status(500).json({ message: "Could not create project request" });
+    console.error("Erreur demande projet:", error);
+    return res.status(500).json({ message: "Impossible d'envoyer votre demande." });
   }
 });
 

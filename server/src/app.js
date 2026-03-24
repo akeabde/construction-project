@@ -12,9 +12,9 @@ dotenv.config();
 
 const app = express();
 
-// Autoriser les appels du frontend (depuis CLIENT_URL dans .env).
+// Autoriser tous les appels (CORS) pour le developpement/demo.
 const corsOptions = {
-  origin: process.env.CLIENT_URL ? process.env.CLIENT_URL.split(",") : "*",
+  origin: "*",
 };
 
 // Middlewares globaux.
