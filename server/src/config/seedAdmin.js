@@ -1,55 +1,51 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 
-// Garantir l existence d un compte admin.
+// ============================================================
+// CONFIGURATION : SEED ADMIN (Admin par défaut)
+// Role : S'assurer qu'un compte administrateur existe au démarrage.
+// ============================================================
 const ensureAdminExists = async () => {
-  // Lire les infos admin depuis .env.
+  // 1) Lire les paramètres configurés.
   const email = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || "";
   const name = (process.env.ADMIN_NAME || "Admin").trim();
   const forceReset = String(process.env.ADMIN_FORCE_RESET || "").trim().toLowerCase() === "true";
 
-  // Si email/password absents, on ne fait rien.
-  if (!email || !password) {
-    return;
-  }
+  // Si rien n'est configuré, on ne fait rien.
+  if (!email || !password) return;
 
-  // Hash du mot de passe admin configure.
+  // 2) Préparer le mot de passe sécurisé.
   const hashedPassword = await bcrypt.hash(password, 10);
 
-  // Chercher un utilisateur avec cet email.
+  // 3) Vérifier si cet admin existe déjà.
   const existingUser = await User.findOne({ email });
+
   if (existingUser) {
-    // Si utilisateur existe deja, on garantit role admin.
     let hasChanges = false;
 
+    // On garantit que ses droits sont bien 'admin'.
     if (existingUser.role !== "admin") {
       existingUser.role = "admin";
       hasChanges = true;
     }
 
-    if (name && existingUser.name !== name) {
-      existingUser.name = name;
-      hasChanges = true;
-    }
-
-    // Ne reinitialiser le mot de passe que si forceReset = true.
+    // On peut forcer la mise à jour du mot de passe (utile pour Reset).
     if (forceReset) {
       existingUser.passwordHash = hashedPassword;
       hasChanges = true;
     }
 
-    if (hasChanges) {
-      await existingUser.save();
-    }
+    if (hasChanges) await existingUser.save();
   } else {
-    // Sinon, on cree l admin.
+    // 4) Si l'admin n'existe pas encore, on le crée.
     await User.create({
       name,
       email,
       passwordHash: hashedPassword,
       role: "admin",
     });
+    console.log(`Admin créé par défaut : ${email}`);
   }
 };
 

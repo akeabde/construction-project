@@ -1,19 +1,22 @@
 const mongoose = require("mongoose");
 
-// Ouvrir la connexion MongoDB.
+// ============================================================
+// CONFIGURATION : DATABASE (MongoDB)
+// Role : Établir la connexion avec la base de données.
+// ============================================================
 const connectDatabase = async () => {
-  // Lire l URL Mongo depuis .env.
+  // On récupère l'adresse de la base (MONGO_URI) configurée dans .env ou Docker.
   const uri = process.env.MONGO_URI;
 
-  // Sans URL on stoppe avec erreur claire.
-  if (!uri) throw new Error("MONGO_URI is missing");
+  if (!uri) throw new Error("MONGO_URI manquante dans la configuration.");
 
   try {
-    // Connexion avec timeout court (feedback rapide).
+    // On demande à Mongoose de se connecter.
     await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
-    console.log("MongoDB connected");
+    console.log("Connecté à MongoDB avec succès !");
   } catch (error) {
-    throw new Error("MongoDB connection failed: " + error.message);
+    console.error("Échec de connexion MongoDB :", error.message);
+    throw error;
   }
 };
 

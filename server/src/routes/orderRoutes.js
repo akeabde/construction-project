@@ -26,11 +26,13 @@ const calculateTotalAmount = (orderItems) => {
   return totalAmount;
 };
 
-// POST /api/orders
-// Creer une commande (utilisateur connecte).
+// ============================================================
+// ROUTE : CREER UNE COMMANDE (POST /api/orders)
+// Action : Enregistre les produits du panier dans la base.
+// ============================================================
 router.post("/", checkAuth, async (req, res) => {
   try {
-    // 1) Lire les champs.
+    // 1) On récupère les infos envoyées par le client.
     const items = req.body.items;
     const fullName = cleanText(req.body.fullName);
     const phone = cleanText(req.body.phone);
@@ -38,50 +40,38 @@ router.post("/", checkAuth, async (req, res) => {
     const address = cleanText(req.body.address);
     const notes = cleanText(req.body.notes);
 
-    // 2) Verifier les champs obligatoires.
+    // 2) Vérification de sécurité de base.
     if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "items are required" });
+      return res.status(400).json({ message: "Le panier est vide." });
     }
 
     if (!fullName || !phone || !city || !address) {
-      return res.status(400).json({ message: "fullName, phone, city and address are required" });
+      return res.status(400).json({ message: "Toutes les coordonnées de livraison sont requises." });
     }
 
-    // 3) Garder seulement les lignes valides du panier.
+    // 3) On vérifie que chaque produit existe et qu'il y a du stock.
     const validItems = [];
     for (const item of items) {
       const productId = cleanText(item.productId);
       const quantity = Number(item.quantity || 1);
-
-      // Un item est valide si productId Mongo valide + quantity entier > 0.
       if (mongoose.Types.ObjectId.isValid(productId) && isValidQuantity(quantity)) {
         validItems.push({ productId, quantity });
       }
     }
 
-    if (validItems.length === 0) {
-      return res.status(400).json({ message: "No valid order items provided" });
-    }
-
-    // 4) Charger les produits concernes.
-    const productIds = [];
-    for (const item of validItems) {
-      productIds.push(item.productId);
-    }
+    // 4) On charge les produits depuis la base de données.
+    const productIds = validItems.map(i => i.productId);
     const products = await Product.find({ _id: { $in: productIds } });
+    const productById = new Map(products.map((p) => [String(p._id), p]));
 
-    // 5) Construire les lignes de commande + verifier stock.
-    const productById = new Map(products.map((product) => [String(product._id), product]));
+    // 5) On construit la liste finale des produits commandés (avec prix à l'instant T).
     const orderItems = [];
-
     for (const item of validItems) {
       const product = productById.get(item.productId);
-      if (!product) {
-        continue;
-      }
+      if (!product) continue;
 
       if (product.stock < item.quantity) {
-        return res.status(400).json({ message: `Stock insuffisant pour ${product.title}` });
+        return res.status(400).json({ message: `Stock insuffisant pour : ${product.title}` });
       }
 
       const lineTotal = product.price * item.quantity;
@@ -95,18 +85,11 @@ router.post("/", checkAuth, async (req, res) => {
       });
     }
 
-    if (orderItems.length === 0) {
-      return res.status(400).json({ message: "No matching products found for order items" });
-    }
-
-    // 6) Calculer le total.
-    const totalAmount = calculateTotalAmount(orderItems);
-
-    // 7) Sauvegarder la commande.
+    // 6) On enregistre la commande finale.
     const order = await Order.create({
       user: req.user.id,
       items: orderItems,
-      totalAmount,
+      totalAmount: calculateTotalAmount(orderItems),
       fullName,
       phone,
       city,
@@ -114,7 +97,7 @@ router.post("/", checkAuth, async (req, res) => {
       notes,
     });
 
-    // 8) Mettre a jour le stock (simple decrement).
+    // 7) Mise à jour du stock : On diminue les quantités vendues.
     const stockUpdates = orderItems.map((item) => ({
       updateOne: {
         filter: { _id: item.product },
@@ -127,7 +110,8 @@ router.post("/", checkAuth, async (req, res) => {
 
     return res.status(201).json(order);
   } catch (error) {
-    return res.status(500).json({ message: "Could not create order" });
+    console.error("Erreur commande:", error);
+    return res.status(500).json({ message: "Impossible de créer la commande." });
   }
 });
 

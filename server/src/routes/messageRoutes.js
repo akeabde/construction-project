@@ -32,23 +32,25 @@ const canDeleteMessage = (message, user) => {
   return false;
 };
 
-// POST /api/messages
-// Creer un nouveau message client.
+// ============================================================
+// ROUTE : ENVOYER UN MESSAGE (POST /api/messages)
+// Action : Sauvegarde un message de contact dans la base.
+// ============================================================
 router.post("/", checkAuth, async (req, res) => {
   try {
-    // 1) Lire les champs.
+    // 1) On utilise les infos de l'utilisateur déjà connecté.
     const name = cleanText(req.user.name);
     const email = cleanText(req.user.email).toLowerCase();
     const phone = cleanText(req.body.phone);
     const subject = cleanText(req.body.subject);
     const message = cleanText(req.body.message);
 
-    // 2) Verifier le champ obligatoire.
+    // 2) Le corps du message est obligatoire.
     if (!message) {
-      return res.status(400).json({ message: "message is required" });
+      return res.status(400).json({ message: "Le message ne peut pas être vide." });
     }
 
-    // 3) Sauvegarder le message.
+    // 3) Création du message de contact.
     const newMessage = await ContactMessage.create({
       user: req.user.id,
       name,
@@ -60,7 +62,8 @@ router.post("/", checkAuth, async (req, res) => {
 
     return res.status(201).json(newMessage);
   } catch (error) {
-    return res.status(500).json({ message: "Could not send message" });
+    console.error("Erreur message contact:", error);
+    return res.status(500).json({ message: "Impossible d'envoyer le message." });
   }
 });
 

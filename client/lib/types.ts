@@ -1,3 +1,4 @@
+// --- TYPES DE BASE ---
 export type Role = "admin" | "user";
 
 export type User = {
@@ -7,11 +8,14 @@ export type User = {
   role: Role;
 };
 
+// --- SESSION ---
+// Représente l'utilisateur connecté avec son jeton de sécurité.
 export type Session = {
   token: string;
   user: User;
 };
 
+// --- PRODUIT ---
 export type Product = {
   _id: string;
   title: string;
@@ -21,11 +25,12 @@ export type Product = {
   category: string;
   stock: number;
   unit: string;
-  featured: boolean;
-  specs: string[];
+  featured: boolean; // Mis en avant ?
+  specs: string[];   // Liste de caractéristiques
   createdAt: string;
 };
 
+// --- COMMANDE ---
 export type OrderItem = {
   product: string;
   title: string;
@@ -35,6 +40,7 @@ export type OrderItem = {
   lineTotal: number;
 };
 
+// L'utilisateur peut être juste un ID (string) ou un objet complet.
 type OrderUser = string | { _id: string; name: string; email: string };
 
 export type Order = {
@@ -51,6 +57,7 @@ export type Order = {
   createdAt: string;
 };
 
+// --- MESSAGE DE CONTACT ---
 export type ContactMessage = {
   _id: string;
   user?: string;
