@@ -5,55 +5,65 @@ const jwt = require("jsonwebtoken");
 // Role : Protéger les routes et vérifier l'identité de l'utilisateur.
 // ============================================================
 
-// 1) checkAuth : Vérifier si l'utilisateur est bien connecté.
+// ============================================================
+// MIDDLEWARE : VERIFIER LA CONNEXION (checkAuth)
+// Role : Empêcher les visiteurs non connectés d'accéder à certaines pages.
+// ============================================================
 const checkAuth = (req, res, next) => {
-  // On récupère le badge (token) envoyé dans l'en-tête de la requête.
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ message: "Non autorisé (Token manquant)" });
+  // 1) On regarde si l'utilisateur a envoyé son "Badge" (Token) dans la requête.
+  const enteteAuthentification = req.headers.authorization;
+
+  // Si l'en-tête n'existe pas, on arrête tout.
+  if (!enteteAuthentification) {
+    return res.status(401).json({ message: "Désolé, vous n'êtes pas connecté." });
   }
 
-  // Le format standard c'est : "Bearer LE_JETON_ICI".
-  if (!authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Format de token invalide" });
+  // 2) On vérifie que le format est correct (doit commencer par 'Bearer ').
+  if (!enteteAuthentification.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Le format du badge est incorrect." });
   }
 
-  // On extrait le token (on coupe "Bearer ").
-  const token = authHeader.slice(7);
+  // 3) On récupère uniquement le code du jeton (on retire 'Bearer ').
+  const jetonATester = enteteAuthentification.slice(7);
 
-  // La clé secrète doit être configurée sur le serveur.
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    return res.status(500).json({ message: "Erreur serveur : JWT_SECRET manquant" });
+  // 4) On vérifie si le jeton est valide avec notre clé secrète.
+  const cleSecrete = process.env.JWT_SECRET;
+  
+  if (!cleSecrete) {
+    return res.status(500).json({ message: "Erreur serveur : la clé secrète est manquante." });
   }
 
   try {
-    // On vérifie si le token est vrai et n'a pas expiré.
-    const payload = jwt.verify(token, secret);
+    const donneesDecodees = jwt.verify(jetonATester, cleSecrete);
 
-    // On stocke les infos de l'utilisateur dans la requête pour la suite.
-    req.user = payload;
-    
-    // On passe à l'étape suivante (la route).
+    // Si c'est bon, on enregistre les infos de l'utilisateur dans 'req.user'.
+    // Comme ça, les prochaines fonctions sauront qui est connecté.
+    req.user = donneesDecodees;
+
+    // On passe à la suite !
     next();
-  } catch (error) {
-    return res.status(401).json({ message: "Token invalide ou expiré" });
+  } catch (erreur) {
+    // Si le jeton est faux ou expiré, on refuse l'accès.
+    return res.status(401).json({ message: "Votre session a expiré, merci de vous reconnecter." });
   }
 };
 
-// 2) checkAdmin : Vérifier si l'utilisateur a les droits d'administrateur.
+// ============================================================
+// MIDDLEWARE : VERIFIER SI C'EST L'ADMIN (checkAdmin)
+// Role : Réserver certaines actions aux administrateurs uniquement.
+// ============================================================
 const checkAdmin = (req, res, next) => {
-  // Si checkAuth n'a pas été appelé avant, on bloque.
+  // 1) On vérifie d'abord si l'utilisateur est connecté.
   if (!req.user) {
-    return res.status(401).json({ message: "Non authentifié" });
+    return res.status(401).json({ message: "Action interdite : vous n'êtes pas connecté." });
   }
 
-  // On vérifie le rôle stocké dans le token.
+  // 2) On vérifie si son rôle est bien 'admin'.
   if (req.user.role !== "admin") {
-    return res.status(403).json({ message: "Accès refusé (Admin uniquement)" });
+    return res.status(403).json({ message: "Action interdite : réservé aux administrateurs." });
   }
 
-  // C'est bon, c'est l'admin !
+  // 3) C'est un admin ! On le laisse passer.
   next();
 };
 

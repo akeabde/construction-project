@@ -4,749 +4,368 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
-import { apiRequest } from "@/lib/api";
-import { clearSession, loadSession } from "@/lib/session";
+import { appelAPI } from "@/lib/api";
+import { supprimerSession, chargerSession } from "@/lib/session";
 import type { ContactMessage, Order, Product, Session } from "@/lib/types";
-import { formatPriceMad, getErrorMessage } from "@/lib/ui";
+import { formatPriceMad } from "@/lib/ui";
 
-// Onglets disponibles dans le tableau de bord admin.
-type AdminTab = "products" | "orders" | "messages";
-
-// Structure du formulaire de creation/modification de produit.
-type ProductForm = {
-  title: string;
-  description: string;
-  price: string;
-  imageUrl: string;
-  category: string;
-  stock: string;
-};
-
-// Valeur initiale vide pour le formulaire produit.
-const EMPTY_PRODUCT_FORM: ProductForm = {
-  title: "",
-  description: "",
-  price: "",
-  imageUrl: "",
-  category: "",
-  stock: "0",
-};
-
-// Les 3 decisions que l admin peut prendre sur une commande.
-const ORDER_DECISIONS = [
-  { value: "accepted", label: "Accepter" },
-  { value: "refused", label: "Refuser" },
-  { value: "out_of_stock", label: "Rupture de stock" },
-] as const;
-
-// Texte lisible pour chaque statut de commande.
-const ORDER_LABELS: Record<string, string> = {
-  in_progress: "En cours",
-  accepted: "Acceptee",
-  refused: "Refusee",
-  out_of_stock: "Rupture de stock",
-};
-
-// Couleurs du badge selon statut de commande.
-const ORDER_BADGE_STYLES: Record<string, string> = {
-  in_progress: "border-[#e8c387] bg-[#fff5e6] text-[#a15b00]",
-  accepted: "border-[#8bcf9d] bg-[#ebfff0] text-[#176534]",
-  refused: "border-[#e5a4a0] bg-[#fff1f0] text-[#8f241c]",
-  out_of_stock: "border-[#d5c9b7] bg-[#f7f2ea] text-[#665845]",
-};
-
-// Texte lisible pour statut de conversation projet.
-const MESSAGE_LABELS: Record<string, string> = {
-  new: "En attente",
-  replied: "Repondu",
-  read: "En attente",
-};
-
-// Fonction simple: transformer un code statut commande en texte.
-const getOrderLabel = (status: string) => ORDER_LABELS[status] || status;
-
-// Fonction simple: choisir le style du badge commande.
-const getOrderBadgeStyle = (status: string) =>
-  ORDER_BADGE_STYLES[status] || "border-[#d5c9b7] bg-[#f7f2ea] text-[#665845]";
-
-// Fonction simple: transformer un statut message en texte.
-const getMessageLabel = (status: string) => MESSAGE_LABELS[status] || status;
-
-// Statistiques resume des commandes.
-type OrderStats = {
-  inProgress: number;
-  accepted: number;
-  refused: number;
-  outOfStock: number;
-};
-
-// Calcul simple des stats commandes pour les petites cartes.
-const calculateOrderStats = (orders: Order[]): OrderStats => {
-  // Valeurs de depart.
-  const stats: OrderStats = {
-    inProgress: 0,
-    accepted: 0,
-    refused: 0,
-    outOfStock: 0,
-  };
-
-  // On parcourt toutes les commandes une par une.
-  for (const order of orders) {
-    const status = order.status;
-
-    if (status === "in_progress") {
-      stats.inProgress += 1;
-      continue;
-    }
-
-    if (status === "accepted") {
-      stats.accepted += 1;
-      continue;
-    }
-
-    if (status === "refused") {
-      stats.refused += 1;
-      continue;
-    }
-
-    if (status === "out_of_stock") {
-      stats.outOfStock += 1;
-    }
-  }
-
-  return stats;
-};
-
+// ============================================================
+// PAGE : TABLEAU DE BORD ADMINISTRATION
+// Role : Permet à l'admin de gérer les produits, les commandes et les messages.
+// ============================================================
 export default function AdminDashboardPage() {
-  // Router Next.js pour redirections.
   const router = useRouter();
 
-  // Session de l utilisateur connecte.
-  const [session, setSession] = useState<Session | null>(null);
+  // --- 1) VARIABLES D'ÉTAT (STATE) ---
+  const [infosSession, setInfosSession] = useState<Session | null>(null);
+  const [ongletActif, setOngletActif] = useState<"produits" | "commandes" | "messages">("produits");
 
-  // Etat visuel: verification de session au demarrage.
-  const [isCheckingAccess, setIsCheckingAccess] = useState(true);
+  // Listes de données récupérées du serveur
+  const [listeProduits, setListeProduits] = useState<Product[]>([]);
+  const [listeCommandes, setListeCommandes] = useState<Order[]>([]);
+  const [listeMessages, setListeMessages] = useState<ContactMessage[]>([]);
 
-  // Etat visuel: chargement des donnees.
-  const [isLoadingData, setIsLoadingData] = useState(true);
+  // États pour le chargement et les messages d'erreur
+  const [chargementEnCours, setChargementEnCours] = useState(true);
+  const [messageRetour, setMessageRetour] = useState("");
 
-  // Onglet actif dans le dashboard.
-  const [activeTab, setActiveTab] = useState<AdminTab>("products");
+  // État pour le formulaire produit (Ajout ou Modification)
+  const [idProduitEnEdition, setIdProduitEnEdition] = useState<string | null>(null);
+  const [formProduit, setFormProduit] = useState({
+    title: "",
+    description: "",
+    price: "",
+    imageUrl: "",
+    category: "",
+    stock: "0",
+  });
 
-  // Message global de retour (succes/erreur).
-  const [feedback, setFeedback] = useState("");
+  // Brouillon pour répondre aux messages
+  const [brouillonReponse, setBrouillonReponse] = useState<{ [id: string]: string }>({});
 
-  // Donnees principales.
-  const [products, setProducts] = useState<Product[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [messages, setMessages] = useState<ContactMessage[]>([]);
-
-  // Edition produit.
-  const [editingProductId, setEditingProductId] = useState<string | null>(null);
-  const [productForm, setProductForm] = useState<ProductForm>(EMPTY_PRODUCT_FORM);
-  const [isSavingProduct, setIsSavingProduct] = useState(false);
-
-  // Brouillons de reponse admin (cle = id message).
-  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
-
-  // Statistiques commandes.
-  const orderStats = calculateOrderStats(orders);
-
-  // Au premier rendu: verifier la session et verifier role admin.
+  // --- 2) VÉRIFICATION DE L'ACCÈS ---
   useEffect(() => {
-    const savedSession = loadSession();
-
-    // Pas de session => pas d acces.
-    if (!savedSession) {
-      setIsCheckingAccess(false);
+    const session = chargerSession();
+    // Si pas connecté ou pas Admin -> on dégage vers la connexion.
+    if (!session || session.user.role !== "admin") {
+      router.push("/auth/login");
       return;
     }
+    setInfosSession(session);
+    chargerToutesLesDonnees(session.token);
+  }, []);
 
-    // Session existe mais role non admin => redirection login.
-    if (savedSession.user.role !== "admin") {
-      router.replace("/auth/login");
-      return;
+  // --- 3) RÉCUPÉRATION DES DONNÉES ---
+  const chargerToutesLesDonnees = async (token: string) => {
+    setChargementEnCours(true);
+    try {
+      // On lance les 3 appels API en même temps.
+      const [produits, commandes, messages] = await Promise.all([
+        appelAPI<Product[]>("/products"),
+        appelAPI<Order[]>("/orders", { token }),
+        appelAPI<ContactMessage[]>("/messages", { token }),
+      ]);
+
+      setListeProduits(produits);
+      setListeCommandes(commandes);
+      setListeMessages(messages);
+    } catch (erreur) {
+      setMessageRetour("Erreur lors du chargement des données.");
+    } finally {
+      setChargementEnCours(false);
     }
-
-    // Session admin valide.
-    setSession(savedSession);
-    setIsCheckingAccess(false);
-  }, [router]);
-
-  // Charger la liste des produits.
-  const loadProducts = async () => {
-    const productList = await apiRequest<Product[]>("/products");
-    setProducts(productList);
   };
 
-  // Charger la liste des commandes (admin).
-  const loadOrders = async (token: string) => {
-    const orderList = await apiRequest<Order[]>("/orders", { token });
-    setOrders(orderList);
+  // --- 4) GESTION DES PRODUITS ---
+
+  const gererChangementForm = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setFormProduit({ ...formProduit, [e.target.name]: e.target.value });
   };
 
-  // Charger la liste des demandes projet (admin).
-  const loadMessages = async (token: string) => {
-    const messageList = await apiRequest<ContactMessage[]>("/messages", { token });
-    setMessages(messageList);
-  };
-
-  // Quand la session admin est prete: charger toutes les donnees.
-  useEffect(() => {
-    if (!session) {
-      setIsLoadingData(false);
-      return;
-    }
-
-    const loadAllData = async () => {
-      setIsLoadingData(true);
-      setFeedback("");
-
-      try {
-        await loadProducts();
-        await loadOrders(session.token);
-        await loadMessages(session.token);
-      } catch (error) {
-        setFeedback(getErrorMessage(error, "Echec du chargement des donnees admin"));
-      } finally {
-        setIsLoadingData(false);
-      }
-    };
-
-    void loadAllData();
-  }, [session]);
-
-  // Revenir au formulaire produit vide.
-  const resetProductForm = () => {
-    setEditingProductId(null);
-    setProductForm(EMPTY_PRODUCT_FORM);
-  };
-
-  // Gérer changements des champs du formulaire produit.
-  const handleProductInputChange = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = event.target;
-
-    // Securite: on ignore tout champ inconnu.
-    if (!["title", "description", "price", "imageUrl", "category", "stock"].includes(name)) {
-      return;
-    }
-
-    const key = name as keyof ProductForm;
-    setProductForm((current) => ({
-      ...current,
-      [key]: value,
-    }));
-  };
-
-  // Creer ou mettre a jour un produit.
-  const saveProduct = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    if (!session) {
-      return;
-    }
-
-    setIsSavingProduct(true);
-    setFeedback("");
+  const enregistrerProduit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!infosSession) return;
 
     try {
-      // Construction du payload envoye a l API.
       const payload = {
-        title: productForm.title.trim(),
-        description: productForm.description.trim(),
-        price: Number(productForm.price),
-        imageUrl: productForm.imageUrl.trim(),
-        category: productForm.category.trim() || "General",
-        stock: Number(productForm.stock),
+        ...formProduit,
+        price: Number(formProduit.price),
+        stock: Number(formProduit.stock),
       };
 
-      // Mode edition.
-      if (editingProductId) {
-        await apiRequest<Product>(`/products/${editingProductId}`, {
+      if (idProduitEnEdition) {
+        // Mise à jour
+        await appelAPI(`/products/${idProduitEnEdition}`, {
           method: "PUT",
-          token: session.token,
+          token: infosSession.token,
           body: payload,
         });
-        setFeedback("Produit mis a jour.");
+        setMessageRetour("Produit mis à jour ✅");
       } else {
-        // Mode creation.
-        await apiRequest<Product>("/products", {
+        // Création
+        await appelAPI("/products", {
           method: "POST",
-          token: session.token,
+          token: infosSession.token,
           body: payload,
         });
-        setFeedback("Produit ajoute.");
+        setMessageRetour("Produit ajouté ✅");
       }
 
-      // Recharge la liste et reset formulaire.
-      await loadProducts();
-      resetProductForm();
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Action produit echouee"));
-    } finally {
-      setIsSavingProduct(false);
+      // Reset et rechargement
+      setFormProduit({ title: "", description: "", price: "", imageUrl: "", category: "", stock: "0" });
+      setIdProduitEnEdition(null);
+      chargerToutesLesDonnees(infosSession.token);
+    } catch (erreur) {
+      setMessageRetour("Erreur lors de l'enregistrement du produit.");
     }
   };
 
-  // Mettre un produit dans le formulaire pour edition.
-  const editProduct = (product: Product) => {
-    setEditingProductId(product._id);
-    setProductForm({
-      title: product.title,
-      description: product.description,
-      price: String(product.price),
-      imageUrl: product.imageUrl,
-      category: product.category,
-      stock: String(product.stock ?? 0),
+  const supprimerProduit = async (id: string) => {
+    if (!infosSession || !confirm("Supprimer ce produit ?")) return;
+    try {
+      await appelAPI(`/products/${id}`, { 
+        method: "DELETE", 
+        token: infosSession.token 
+      });
+      chargerToutesLesDonnees(infosSession.token);
+    } catch (erreur) {
+      setMessageRetour("Erreur suppression.");
+    }
+  };
+
+  const preparerModification = (p: Product) => {
+    setIdProduitEnEdition(p._id);
+    setFormProduit({
+      title: p.title,
+      description: p.description,
+      price: String(p.price),
+      imageUrl: p.imageUrl,
+      category: p.category,
+      stock: String(p.stock),
     });
-    setActiveTab("products");
   };
 
-  // Supprimer un produit.
-  const deleteProduct = async (productId: string) => {
-    if (!session) {
-      return;
-    }
+  // --- 5) GESTION DES COMMANDES ---
 
-    if (!window.confirm("Supprimer ce produit ?")) {
-      return;
-    }
-
+  const changerStatutCommande = async (id: string, nouveauStatut: string) => {
+    if (!infosSession) return;
     try {
-      await apiRequest<{ message: string }>(`/products/${productId}`, {
-        method: "DELETE",
-        token: session.token,
-      });
-
-      await loadProducts();
-      setFeedback("Produit supprime.");
-
-      // Si le produit supprime etait en edition, reset form.
-      if (editingProductId === productId) {
-        resetProductForm();
-      }
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Suppression echouee"));
-    }
-  };
-
-  // Mettre a jour statut d une commande.
-  const updateOrderStatus = async (orderId: string, nextStatus: string) => {
-    if (!session) {
-      return;
-    }
-
-    try {
-      await apiRequest<Order>(`/orders/${orderId}/status`, {
+      await appelAPI(`/orders/${id}/status`, {
         method: "PATCH",
-        token: session.token,
-        body: { status: nextStatus },
+        token: infosSession.token,
+        body: { status: nouveauStatut },
       });
-
-      await loadOrders(session.token);
-      setFeedback("Statut de commande mis a jour.");
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Mise a jour du statut echouee"));
+      chargerToutesLesDonnees(infosSession.token);
+    } catch (erreur) {
+      setMessageRetour("Erreur changement statut.");
     }
   };
 
-  // Supprimer une commande.
-  const deleteOrder = async (orderId: string) => {
-    if (!session) {
-      return;
-    }
+  // --- 6) GESTION DES MESSAGES ---
 
-    if (!window.confirm("Supprimer cette commande ?")) {
-      return;
-    }
+  const envoyerReponseAdmin = async (id: string) => {
+    if (!infosSession) return;
+    const texte = brouillonReponse[id];
+    if (!texte) return;
 
     try {
-      await apiRequest<{ message: string }>(`/orders/${orderId}`, {
-        method: "DELETE",
-        token: session.token,
-      });
-
-      await loadOrders(session.token);
-      setFeedback("Commande supprimee.");
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Suppression de commande echouee"));
-    }
-  };
-
-  // Envoyer une reponse admin sur une demande projet.
-  const sendReply = async (messageId: string) => {
-    if (!session) {
-      return;
-    }
-
-    const replyText = (replyDrafts[messageId] || "").trim();
-    if (!replyText) {
-      setFeedback("Ecrivez une reponse avant d envoyer.");
-      return;
-    }
-
-    try {
-      await apiRequest<ContactMessage>(`/messages/${messageId}/reply`, {
+      await appelAPI(`/messages/${id}/reply`, {
         method: "PATCH",
-        token: session.token,
-        body: { reply: replyText },
+        token: infosSession.token,
+        body: { reply: texte },
       });
-
-      // Nettoyer le champ local du message traite.
-      setReplyDrafts((current) => ({ ...current, [messageId]: "" }));
-
-      await loadMessages(session.token);
-      setFeedback("Reponse envoyee.");
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Reponse echouee"));
+      setBrouillonReponse({ ...brouillonReponse, [id]: "" });
+      chargerToutesLesDonnees(infosSession.token);
+      setMessageRetour("Réponse envoyée ✅");
+    } catch (erreur) {
+      setMessageRetour("Erreur envoi réponse.");
     }
   };
 
-  // Supprimer une conversation projet.
-  const deleteMessage = async (messageId: string) => {
-    if (!session) {
-      return;
-    }
+  // --- RENDU (UI) ---
 
-    if (!window.confirm("Supprimer cette conversation ?")) {
-      return;
-    }
-
-    try {
-      await apiRequest<{ message: string }>(`/messages/${messageId}`, {
-        method: "DELETE",
-        token: session.token,
-      });
-
-      await loadMessages(session.token);
-      setFeedback("Conversation supprimee.");
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Suppression echouee"));
-    }
-  };
-
-  // Deconnexion admin.
-  const logout = () => {
-    clearSession();
-    router.push("/auth/login");
-  };
-
-  // Ecran simple pendant verification session.
-  if (isCheckingAccess) {
-    return <main className="shell py-8 text-sm text-[#6b6257]">Verification de la session...</main>;
-  }
-
-  // Ecran simple si pas de session admin.
-  if (!session) {
-    return (
-      <main className="shell py-10">
-        <section className="panel space-y-4 p-8">
-          <h1 className="font-display text-2xl font-bold">Tableau de bord admin</h1>
-          <p className="text-sm text-[#6b6257]">Connectez-vous en tant qu administrateur.</p>
-          <div className="flex gap-2">
-            <Link href="/auth/login" className="btn btn-primary">
-              Connexion
-            </Link>
-            <Link href="/" className="btn btn-ghost">
-              Accueil
-            </Link>
-          </div>
-        </section>
-      </main>
-    );
-  }
+  if (!infosSession) return null;
 
   return (
-    <main className="shell space-y-6 py-6">
-      {/* En-tete principal admin */}
-      <header className="panel hero-card flex flex-wrap items-center justify-between gap-4 p-5 md:p-6">
+    <div className="bg-[#f1f5f9] min-h-screen">
+      {/* Barre du haut */}
+      <header className="bg-[#1e293b] text-white p-6 shadow-lg flex justify-between items-center">
         <div>
-          <p className="text-xs uppercase tracking-[0.16em] text-white/70">Tableau de bord admin</p>
-          <h1 className="mt-1 font-display text-3xl font-bold text-white">Bienvenue, {session.user.name}</h1>
+          <h1 className="text-2xl font-bold">Administration FIKHI</h1>
+          <p className="text-slate-400 text-sm">Session de : {infosSession.user.name}</p>
         </div>
-        <button className="btn border border-white/35 bg-white/10 text-sm text-white hover:bg-white/20" onClick={logout}>
-          Deconnexion
+        <button 
+          onClick={() => { supprimerSession(); router.push("/"); }}
+          className="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-lg font-bold text-sm"
+        >
+          Déconnexion
         </button>
       </header>
 
-      {/* Navigation des onglets */}
-      <nav className="panel flex flex-wrap gap-2 p-3">
-        <button className={`btn text-sm ${activeTab === "products" ? "btn-primary" : "btn-ghost"}`} onClick={() => setActiveTab("products")}>
-          Produits
-        </button>
-        <button className={`btn text-sm ${activeTab === "orders" ? "btn-primary" : "btn-ghost"}`} onClick={() => setActiveTab("orders")}>
-          Commandes
-        </button>
-        <button className={`btn text-sm ${activeTab === "messages" ? "btn-primary" : "btn-ghost"}`} onClick={() => setActiveTab("messages")}>
-          Demandes projet
-        </button>
-      </nav>
+      <main className="max-w-7xl mx-auto p-6 space-y-6">
+        
+        {/* Menu de navigation Admin */}
+        <nav className="flex gap-4 p-2 bg-white rounded-xl shadow-sm border border-slate-200">
+          <button 
+            onClick={() => setOngletActif("produits")}
+            className={`flex-1 py-3 rounded-lg font-bold transition ${ongletActif === 'produits' ? 'bg-[#ff7a18] text-white' : 'hover:bg-slate-100 text-slate-600'}`}
+          >
+            📦 Produits
+          </button>
+          <button 
+            onClick={() => setOngletActif("commandes")}
+            className={`flex-1 py-3 rounded-lg font-bold transition ${ongletActif === 'commandes' ? 'bg-[#ff7a18] text-white' : 'hover:bg-slate-100 text-slate-600'}`}
+          >
+            🛒 Commandes
+          </button>
+          <button 
+            onClick={() => setOngletActif("messages")}
+            className={`flex-1 py-3 rounded-lg font-bold transition ${ongletActif === 'messages' ? 'bg-[#ff7a18] text-white' : 'hover:bg-slate-100 text-slate-600'}`}
+          >
+            💬 Demandes Client
+          </button>
+        </nav>
 
-      {/* Message global de feedback */}
-      {feedback ? <p className="rounded-xl bg-[#fff4e5] p-3 text-sm text-[#c46a00]">{feedback}</p> : null}
+        {messageRetour && (
+          <div className="bg-white p-4 text-center rounded-xl border-l-4 border-orange-500 shadow-sm font-bold text-slate-700">
+            {messageRetour}
+          </div>
+        )}
 
-      {/* Etat de chargement */}
-      {isLoadingData ? <section className="panel p-6 text-sm text-[#5d5448]">Chargement des donnees...</section> : null}
+        {chargementEnCours ? (
+          <div className="p-20 text-center text-slate-500 text-xl font-medium italic">Chargement des données en cours...</div>
+        ) : (
+          <div className="space-y-6">
+            
+            {/* ONGLET : PRODUITS */}
+            {ongletActif === "produits" && (
+              <div className="grid lg:grid-cols-3 gap-8">
+                {/* Formulaire */}
+                <form onSubmit={enregistrerProduit} className="panel bg-white p-6 rounded-2xl shadow-sm border border-slate-200 self-start space-y-4">
+                  <h2 className="text-xl font-bold border-b pb-2">{idProduitEnEdition ? "✏️ Modifier" : "➕ Nouveau Produit"}</h2>
+                  <input name="title" placeholder="Titre du produit" value={formProduit.title} onChange={gererChangementForm} required />
+                  <textarea name="description" placeholder="Description courte" rows={3} value={formProduit.description} onChange={gererChangementForm} required className="w-full" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input name="price" type="number" placeholder="Prix (DH)" value={formProduit.price} onChange={gererChangementForm} required />
+                    <input name="stock" type="number" placeholder="Stock" value={formProduit.stock} onChange={gererChangementForm} required />
+                  </div>
+                  <input name="imageUrl" placeholder="Lien image (URL)" value={formProduit.imageUrl} onChange={gererChangementForm} required />
+                  <input name="category" placeholder="Catégorie" value={formProduit.category} onChange={gererChangementForm} required />
+                  <button type="submit" className="btn btn-primary w-full py-3 font-bold">
+                    {idProduitEnEdition ? "Mettre à jour" : "Ajouter au Catalogue"}
+                  </button>
+                  {idProduitEnEdition && (
+                    <button type="button" onClick={() => { setIdProduitEnEdition(null); setFormProduit({ title: "", description: "", price: "", imageUrl: "", category: "", stock: "0" }); }} className="btn btn-ghost w-full">Annuler</button>
+                  )}
+                </form>
 
-      {/* Section Produits */}
-      {activeTab === "products" && !isLoadingData ? (
-        <section className="grid items-start gap-5 lg:grid-cols-[1fr_1.4fr]">
-          {/* Formulaire produit */}
-          <form className="panel space-y-3 p-5" onSubmit={saveProduct}>
-            <h2 className="font-display text-2xl font-bold">{editingProductId ? "Modifier le produit" : "Ajouter un produit"}</h2>
-
-            <input name="title" placeholder="Titre" value={productForm.title} onChange={handleProductInputChange} required />
-            <textarea
-              name="description"
-              rows={3}
-              placeholder="Description"
-              value={productForm.description}
-              onChange={handleProductInputChange}
-              required
-            />
-            <input
-              name="price"
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="Prix"
-              value={productForm.price}
-              onChange={handleProductInputChange}
-              required
-            />
-            <input
-              name="stock"
-              type="number"
-              min="0"
-              step="1"
-              placeholder="Stock"
-              value={productForm.stock}
-              onChange={handleProductInputChange}
-              required
-            />
-            <input name="imageUrl" placeholder="URL image" value={productForm.imageUrl} onChange={handleProductInputChange} required />
-            <input name="category" placeholder="Categorie" value={productForm.category} onChange={handleProductInputChange} required />
-
-            <div className="flex gap-2">
-              <button className="btn btn-primary flex-1" type="submit" disabled={isSavingProduct}>
-                {isSavingProduct ? "Enregistrement..." : editingProductId ? "Mettre a jour" : "Creer"}
-              </button>
-              {editingProductId ? (
-                <button className="btn btn-ghost" type="button" onClick={resetProductForm}>
-                  Annuler
-                </button>
-              ) : null}
-            </div>
-          </form>
-
-          {/* Liste produits */}
-          <div className="panel p-5">
-            <h2 className="font-display text-2xl font-bold">Liste des produits</h2>
-            {products.length === 0 ? (
-              <p className="mt-3 text-sm text-[#5d5448]">Aucun produit pour le moment.</p>
-            ) : (
-              <div className="mt-4 space-y-3">
-                {products.map((product) => (
-                  <article key={product._id} className="rounded-xl border border-[#d7cebf] bg-white p-3">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="flex gap-3">
-                        <div className="h-14 w-14 overflow-hidden rounded-lg bg-[#ece5d7]">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={product.imageUrl} alt={product.title} className="h-full w-full object-cover" />
+                {/* Liste */}
+                <div className="lg:col-span-2 space-y-4">
+                  <h2 className="text-2xl font-bold flex items-center gap-2">Liste des Articles <span className="bg-slate-200 text-slate-700 text-sm px-2 py-1 rounded-lg">{listeProduits.length}</span></h2>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    {listeProduits.map((p) => (
+                      <div key={p._id} className="bg-white p-4 rounded-xl border border-slate-200 flex gap-4 items-center">
+                        <img src={p.imageUrl} alt={p.title} className="w-16 h-16 rounded-lg object-cover bg-slate-100" />
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-900 truncate">{p.title}</p>
+                          <p className="text-sm text-slate-500">{formatPriceMad(p.price)}</p>
                         </div>
-                        <div>
-                          <h3 className="font-semibold">{product.title}</h3>
-                          <p className="text-xs text-[#5d5448]">{product.description}</p>
-                          <p className="text-xs text-[#c46a00]">{formatPriceMad(product.price)}</p>
-                          <p className="text-xs text-[#5d5448]">Categorie: {product.category}</p>
+                        <div className="flex flex-col gap-1">
+                          <button onClick={() => preparerModification(p)} className="text-blue-600 hover:bg-blue-50 p-1 rounded font-bold text-xs uppercase">Éditer</button>
+                          <button onClick={() => supprimerProduit(p._id)} className="text-red-500 hover:bg-red-50 p-1 rounded font-bold text-xs uppercase">Suppr.</button>
                         </div>
                       </div>
-
-                      <div className="flex gap-2">
-                        <button className="btn btn-ghost text-sm" type="button" onClick={() => editProduct(product)}>
-                          Modifier
-                        </button>
-                        <button className="btn btn-primary text-sm" type="button" onClick={() => deleteProduct(product._id)}>
-                          Supprimer
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
-          </div>
-        </section>
-      ) : null}
 
-      {/* Section Commandes */}
-      {activeTab === "orders" && !isLoadingData ? (
-        <section className="panel p-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-display text-2xl font-bold">Commandes</h2>
-            <span className="chip">{orders.length} commandes</span>
-          </div>
-
-          {orders.length === 0 ? (
-            <p className="mt-3 text-sm text-[#5d5448]">Aucune commande pour le moment.</p>
-          ) : (
-            <div className="mt-4 space-y-4">
-              {/* Cartes statistiques */}
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-[#e8c387] bg-[#fff5e6] p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#a15b00]">En cours</p>
-                  <p className="mt-1 font-display text-2xl font-bold text-[#7f4700]">{orderStats.inProgress}</p>
-                </div>
-                <div className="rounded-xl border border-[#8bcf9d] bg-[#ebfff0] p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#176534]">Acceptees</p>
-                  <p className="mt-1 font-display text-2xl font-bold text-[#176534]">{orderStats.accepted}</p>
-                </div>
-                <div className="rounded-xl border border-[#e5a4a0] bg-[#fff1f0] p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#8f241c]">Refusees</p>
-                  <p className="mt-1 font-display text-2xl font-bold text-[#8f241c]">{orderStats.refused}</p>
-                </div>
-                <div className="rounded-xl border border-[#d5c9b7] bg-[#f7f2ea] p-3">
-                  <p className="text-xs uppercase tracking-[0.14em] text-[#665845]">Rupture stock</p>
-                  <p className="mt-1 font-display text-2xl font-bold text-[#665845]">{orderStats.outOfStock}</p>
-                </div>
-              </div>
-
-              {/* Liste des commandes */}
+            {/* ONGLET : COMMANDES */}
+            {ongletActif === "commandes" && (
               <div className="space-y-4">
-                {orders.map((order) => (
-                  <article key={order._id} className="overflow-hidden rounded-2xl border border-[#d7cebf] bg-white shadow-[0_10px_22px_rgba(66,52,33,0.09)]">
-                    <div className="border-b border-[#e2d8c8] bg-[#fcf8f2] p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <p className="text-xs uppercase tracking-[0.14em] text-[#8b7e6b]">Commande</p>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${getOrderBadgeStyle(order.status)}`}>
-                            {getOrderLabel(order.status)}
+                <h2 className="text-2xl font-bold">Ventes et Commandes <span className="bg-slate-200 px-2 py-1 rounded-lg text-sm">{listeCommandes.length}</span></h2>
+                <div className="grid gap-4">
+                  {listeCommandes.map((c) => (
+                    <div key={c._id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap lg:flex-nowrap justify-between gap-6">
+                      <div className="space-y-2 flex-1">
+                        <div className="flex gap-2 items-center">
+                          <p className="font-bold text-slate-900 text-lg">{c.fullName}</p>
+                          <span className={`px-2 py-1 rounded-lg text-xs font-bold uppercase ${c.status === 'accepted' ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                            {c.status}
                           </span>
-                          <select
-                            value={ORDER_DECISIONS.some((option) => option.value === order.status) ? order.status : ""}
-                            onChange={(event) => {
-                              const nextStatus = event.target.value;
-                              if (nextStatus) {
-                                void updateOrderStatus(order._id, nextStatus);
-                              }
-                            }}
-                            className="w-52 bg-white text-sm"
-                          >
-                            <option value="" disabled>
-                              Choisir une decision
-                            </option>
-                            {ORDER_DECISIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                          <button className="btn btn-ghost text-sm" type="button" onClick={() => deleteOrder(order._id)}>
-                            Supprimer
-                          </button>
+                        </div>
+                        <p className="text-sm text-slate-500">📞 {c.phone} | 📍 {c.city}</p>
+                        <div className="flex gap-2 flex-wrap">
+                          {c.items.map((it, idx) => (
+                            <span key={idx} className="bg-slate-100 text-slate-600 text-xs px-2 py-1 rounded-md font-medium">
+                              {it.title} (x{it.quantity})
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="text-right space-y-4 self-center min-w-[200px]">
+                        <p className="text-2xl font-bold text-[#ff7a18]">{formatPriceMad(c.totalAmount)}</p>
+                        <div className="flex gap-2 justify-end">
+                          <button onClick={() => changerStatutCommande(c._id, 'accepted')} className="bg-green-500 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-green-600">ACCEPTER</button>
+                          <button onClick={() => changerStatutCommande(c._id, 'refused')} className="bg-red-500 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-red-600">REFUSER</button>
                         </div>
                       </div>
                     </div>
-
-                    <div className="grid gap-4 p-4 md:grid-cols-[1fr_1.2fr]">
-                      <div className="space-y-2 text-sm text-[#4f463a]">
-                        <p>
-                          <span className="font-semibold text-[#2e2619]">Client:</span>{" "}
-                          {typeof order.user === "string" ? "Utilisateur inconnu" : `${order.user.name} (${order.user.email})`}
-                        </p>
-                        <p>
-                          <span className="font-semibold text-[#2e2619]">Telephone:</span> {order.phone}
-                        </p>
-                        <p>
-                          <span className="font-semibold text-[#2e2619]">Adresse:</span> {order.city}, {order.address}
-                        </p>
-                        <p className="rounded-lg border border-[#e2d8c8] bg-[#f7f1e8] px-3 py-2 font-semibold text-[#7f4700]">
-                          Total: {formatPriceMad(order.totalAmount)}
-                        </p>
-                      </div>
-
-                      <div className="rounded-xl border border-[#e2d8c8] bg-[#fffdfa] p-3">
-                        <p className="text-xs uppercase tracking-[0.14em] text-[#8b7e6b]">Produits commandes</p>
-                        <ul className="mt-2 space-y-2">
-                          {order.items.map((item) => (
-                            <li
-                              key={`${order._id}-${item.product}`}
-                              className="flex items-start justify-between gap-3 border-b border-[#efe7db] pb-2 text-sm last:border-0 last:pb-0"
-                            >
-                              <span className="text-[#4f463a]">
-                                {item.title} <span className="font-semibold text-[#2e2619]">x{item.quantity}</span>
-                              </span>
-                              <span className="font-semibold text-[#7f4700]">{formatPriceMad(item.lineTotal)}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  </article>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-        </section>
-      ) : null}
+            )}
 
-      {/* Section Demandes Projet */}
-      {activeTab === "messages" && !isLoadingData ? (
-        <section className="panel p-5">
-          <h2 className="font-display text-2xl font-bold">Demandes de projet</h2>
-          {messages.length === 0 ? (
-            <p className="mt-3 text-sm text-[#5d5448]">Aucune demande de projet pour le moment.</p>
-          ) : (
-            <div className="mt-4 space-y-3">
-              {messages.map((message) => (
-                <article key={message._id} className="rounded-xl border border-[#d7cebf] bg-white p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div>
-                      <p className="font-semibold">{message.name}</p>
-                      <p className="text-sm text-[#5d5448]">{message.email}</p>
-                      {message.phone ? <p className="text-sm text-[#5d5448]">{message.phone}</p> : null}
+            {/* ONGLET : MESSAGES */}
+            {ongletActif === "messages" && (
+              <div className="space-y-4">
+                <h2 className="text-2xl font-bold">Demandes de Conseils / Projets <span className="bg-slate-200 px-2 py-1 rounded-lg text-sm">{listeMessages.length}</span></h2>
+                <div className="grid md:grid-cols-2 gap-6">
+                  {listeMessages.map((m) => (
+                    <div key={m._id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <p className="font-bold text-slate-900">{m.subject}</p>
+                          <p className="text-xs text-slate-500 italic">De: {m.email} (📞{m.phone})</p>
+                        </div>
+                        <span className={`px-2 py-1 rounded-lg text-xs font-bold uppercase ${m.status === 'replied' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                          {m.status === 'replied' ? '✅ Répondu' : '⏳ Nouveau'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-700 bg-slate-50 p-3 rounded-xl">"{m.message}"</p>
+                      
+                      {m.adminReply && (
+                        <div className="bg-green-50 p-3 rounded-xl border-l-4 border-green-500">
+                          <p className="text-xs font-bold text-green-700">Votre Réponse :</p>
+                          <p className="text-sm text-slate-800 italic">{m.adminReply}</p>
+                        </div>
+                      )}
+
+                      <div className="space-y-2">
+                        <textarea 
+                          placeholder="Écrire votre réponse ici..." 
+                          className="w-full text-sm p-3" 
+                          rows={2} 
+                          value={brouillonReponse[m._id] || ""} 
+                          onChange={(e) => setBrouillonReponse({...brouillonReponse, [m._id]: e.target.value})}
+                        />
+                        <button 
+                          onClick={() => envoyerReponseAdmin(m._id)}
+                          className="btn btn-primary w-full py-2 text-xs font-bold"
+                        >
+                          Envoyer la Réponse
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span className="chip">{getMessageLabel(message.status)}</span>
-                      <button className="btn btn-ghost text-sm" type="button" onClick={() => deleteMessage(message._id)}>
-                        Supprimer
-                      </button>
-                    </div>
-                  </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
-                  {message.subject ? <p className="mt-2 text-sm font-semibold">{message.subject}</p> : null}
-                  <p className="mt-1 text-sm text-[#4c4338]">{message.message}</p>
-
-                  {message.adminReply ? (
-                    <div className="mt-3 rounded-xl border border-[#d9cdb9] bg-[#f9f4ea] p-3">
-                      <p className="text-xs uppercase tracking-[0.12em] text-[#7c6e5a]">Reponse admin</p>
-                      <p className="mt-1 text-sm text-[#3f372c]">{message.adminReply}</p>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-3 space-y-2">
-                    <textarea
-                      rows={3}
-                      placeholder="Ecrire une reponse au client..."
-                      value={replyDrafts[message._id] || ""}
-                      onChange={(event) =>
-                        setReplyDrafts((current) => ({
-                          ...current,
-                          [message._id]: event.target.value,
-                        }))
-                      }
-                    />
-                    <button className="btn btn-primary text-sm" type="button" onClick={() => sendReply(message._id)}>
-                      Envoyer reponse
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-      ) : null}
-    </main>
+          </div>
+        )}
+      </main>
+    </div>
   );
 }

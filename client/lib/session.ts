@@ -1,44 +1,49 @@
 import type { Session } from "@/lib/types";
 
-const SESSION_KEY = "fikhi_construction_session";
+// Clé secrète sous laquelle on enregistre les infos dans le navigateur.
+const NOM_DE_LA_CLE = "fikhi_construction_session";
 
-// --- CHARGER LA SESSION ---
-// Cette fonction récupère les données de l'utilisateur stockées dans le navigateur.
-export const loadSession = (): Session | null => {
-  // Protection pour Next.js (SSR) : On vérifie si on est bien côté navigateur.
+// --- 1) CHARGER LA SESSION ---
+// Sert à savoir si l'utilisateur est déjà connecté en ouvrant le site.
+export const chargerSession = (): Session | null => {
+  // On vérifie si on est bien dans un navigateur (Safety check).
   if (typeof window === "undefined") {
     return null;
   }
 
-  // Lire la valeur brute enregistrée dans le 'localStorage'.
-  const raw = window.localStorage.getItem(SESSION_KEY);
-  if (!raw) {
+  // On lit ce qui est écrit dans la "mémoire locale" (LocalStorage).
+  const texteBrut = window.localStorage.getItem(NOM_DE_LA_CLE);
+  
+  // Si c'est vide, personne n'est connecté.
+  if (!texteBrut) {
     return null;
   }
 
   try {
-    // On transforme le texte JSON en objet JavaScript manipulable.
-    return JSON.parse(raw) as Session;
-  } catch {
-    // Si ce qu'on a lu n'est pas du bon JSON, on nettoie tout.
-    window.localStorage.removeItem(SESSION_KEY);
+    // On re-transforme le texte en objet JavaScript.
+    const objetSession = JSON.parse(texteBrut);
+    return objetSession as Session;
+  } catch (erreur) {
+    // Si le texte était corrompu, on vide tout.
+    window.localStorage.removeItem(NOM_DE_LA_CLE);
     return null;
   }
 };
 
-// --- SAUVEGARDER LA SESSION ---
-export const saveSession = (session: Session) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  // On enregistre l'objet sous forme de texte JSON.
-  window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+// --- 2) ENREGISTRER LA SESSION ---
+// À appeler juste après la connexion ou l'inscription.
+export const enregistrerSession = (nouvelleSession: Session) => {
+  if (typeof window === "undefined") return;
+
+  // On transforme l'objet en texte JSON pour pouvoir le stocker.
+  const texteAEnregistrer = JSON.stringify(nouvelleSession);
+  window.localStorage.setItem(NOM_DE_LA_CLE, texteAEnregistrer);
 };
 
-// --- SUPPRIMER LA SESSION (LOGOUT) ---
-export const clearSession = () => {
-  if (typeof window === "undefined") {
-    return;
-  }
-  window.localStorage.removeItem(SESSION_KEY);
+// --- 3) SUPPRIMER LA SESSION (DECONNEXION) ---
+export const supprimerSession = () => {
+  if (typeof window === "undefined") return;
+
+  // On efface tout de la mémoire du navigateur.
+  window.localStorage.removeItem(NOM_DE_LA_CLE);
 };

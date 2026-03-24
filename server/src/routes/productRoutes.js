@@ -5,235 +5,186 @@ const { checkAuth, checkAdmin } = require("../middleware/auth");
 
 const router = express.Router();
 
-// Nettoyer une valeur texte (eviter null/undefined + espaces).
-const cleanText = (value) => String(value || "").trim();
+// --- FONCTIONS D'AIDE (HELPERS) ---
 
-// Verifier qu une valeur est vraiment fournie (pour update partielle).
-const isValueProvided = (value) => value !== undefined && value !== null && String(value).trim() !== "";
-
-// Lire un boolean qui peut venir comme string.
-const readBoolean = (value) => {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return value.toLowerCase() === "true";
-  return Boolean(value);
+// 1) Nettoyer un texte simple (enlever les espaces inutiles).
+const nettoyerTexte = (valeur) => {
+  return String(valeur || "").trim();
 };
 
-// Nettoyer la liste des caracteristiques (specs) produit.
-const readSpecs = (rawSpecs) => {
-  // Si ce n est pas un tableau, on retourne une liste vide.
-  if (!Array.isArray(rawSpecs)) {
+// 2) Extraire proprement la liste des caractéristiques (specs).
+const extraireCaracteristiques = (listeBrute) => {
+  if (!Array.isArray(listeBrute)) {
     return [];
   }
 
-  // Version simple pour debutant: boucle classique.
-  const specs = [];
-  for (const item of rawSpecs) {
-    const oneSpec = cleanText(item);
-    if (oneSpec) {
-      specs.push(oneSpec);
+  const caracteristiquesNettoyées = [];
+  for (const element of listeBrute) {
+    const texteNettoyé = nettoyerTexte(element);
+    if (texteNettoyé !== "") {
+      caracteristiquesNettoyées.push(texteNettoyé);
     }
   }
-
-  return specs;
+  return caracteristiquesNettoyées;
 };
 
-// Lire les champs produit depuis req.body.
-const readProductPayload = (body) => {
-  return {
-    title: cleanText(body.title),
-    description: cleanText(body.description),
-    price: Number(body.price),
-    imageUrl: cleanText(body.imageUrl),
-    category: cleanText(body.category),
-    stock: Number(body.stock || 0),
-    unit: cleanText(body.unit || "piece"),
-    featured: Boolean(body.featured),
-    specs: readSpecs(body.specs),
-  };
+// 3) Vérifier si les informations d'un produit sont complètes.
+const verifierSiProduitEstValide = (donnees) => {
+  if (!donnees.title) return false;       // Titre manquant ?
+  if (!donnees.description) return false; // Description manquante ?
+  if (!donnees.price) return false;       // Prix manquant ?
+  if (!donnees.category) return false;    // Catégorie manquante ?
+  if (!donnees.imageUrl) return false;    // Image manquante ?
+  return true; // Tout est bon !
 };
 
-// Lire les champs produit pour un update (garder valeurs existantes si absentes).
-const readProductUpdatePayload = (body, existing) => {
-  const title = cleanText(body.title);
-  const description = cleanText(body.description);
-  const imageUrl = cleanText(body.imageUrl);
-  const category = cleanText(body.category);
-  const price = Number(body.price);
-
-  const payload = {
-    title: title || existing.title,
-    description: description || existing.description,
-    price: Number.isNaN(price) ? existing.price : price,
-    imageUrl: imageUrl || existing.imageUrl,
-    category: category || existing.category,
-    stock: existing.stock,
-    unit: existing.unit,
-    featured: existing.featured,
-    specs: existing.specs,
-  };
-
-  if (isValueProvided(body.stock)) {
-    const stock = Number(body.stock);
-    payload.stock = Number.isNaN(stock) ? existing.stock : stock;
-  }
-
-  if (isValueProvided(body.unit)) {
-    payload.unit = cleanText(body.unit);
-  }
-
-  if (body.featured !== undefined && body.featured !== null) {
-    payload.featured = readBoolean(body.featured);
-  }
-
-  if (Array.isArray(body.specs)) {
-    payload.specs = readSpecs(body.specs);
-  }
-
-  return payload;
-};
-
-// Verifier les champs obligatoires avant create/update.
-const isProductPayloadValid = (payload) => {
-  if (!payload.title) return false;
-  if (!payload.description) return false;
-  if (Number.isNaN(payload.price)) return false;
-  if (!payload.imageUrl) return false;
-  if (!payload.category) return false;
-  return true;
-};
+// --- ROUTES ---
 
 // ============================================================
-// GET /api/products
-// Action: Recupere la liste de tous les produits.
-// Public: Oui (tout le monde peut voir les produits).
+// ROUTE : VOIR TOUS LES PRODUITS (GET /api/products)
 // ============================================================
 router.get("/", async (req, res) => {
   try {
-    // 1. Lire les filtres envoyes dans l'URL (ex: ?category=tools).
-    const search = cleanText(req.query.search);
-    const category = cleanText(req.query.category);
-    const featured = cleanText(req.query.featured);
+    // 1) On récupère les filtres demandés dans l'URL.
+    const motCleRecherche = nettoyerTexte(req.query.search);
+    const categorieChoisie = nettoyerTexte(req.query.category);
+    const estMisEnAvant = nettoyerTexte(req.query.featured);
 
-    // 2. Preparer l'objet de recherche pour MongoDB.
-    const query = {};
+    // 2) On prépare la recherche pour MongoDB.
+    const filtreMongo = {};
 
-    // Si l'utilisateur a ecrit quelque chose dans la barre de recherche.
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: "i" } }, // "i" veut dire insensible a la casse (Majuscule/Minuscule).
-        { description: { $regex: search, $options: "i" } },
-        { category: { $regex: search, $options: "i" } },
+    // Si on cherche un mot clé précis.
+    if (motCleRecherche !== "") {
+      filtreMongo.$or = [
+        { title: { $regex: motCleRecherche, $options: "i" } },
+        { category: { $regex: motCleRecherche, $options: "i" } }
       ];
     }
 
-    // Filtrer par categorie si ce n'est pas "all".
-    if (category && category !== "all") {
-      query.category = category;
+    // Si on veut une catégorie précise (et pas 'toutes').
+    if (categorieChoisie !== "" && categorieChoisie !== "all") {
+      filtreMongo.category = categorieChoisie;
     }
 
-    // Filtrer les produits "Coups de coeur" (featured).
-    if (featured === "true") {
-      query.featured = true;
+    // Si on veut uniquement les produits "Coups de coeur".
+    if (estMisEnAvant === "true") {
+      filtreMongo.featured = true;
     }
 
-    // 3. Chercher dans la base de donnees et trier par date (le plus recent en premier).
-    const products = await Product.find(query).sort({ createdAt: -1 });
+    // 3) On lance la recherche dans la base de données.
+    const listeDesProduits = await Product.find(filtreMongo).sort({ createdAt: -1 });
 
-    // 4. Renvoyer les donnees au format JSON.
-    return res.json(products);
-  } catch (error) {
-    // En cas de gros probleme technique (serveur/base de donnees).
-    console.error("Erreur chargement produits:", error);
-    return res.status(500).json({ message: "Impossible de charger les produits" });
-  }
-});
+    // 4) On renvoie la liste au client.
+    return res.json(listeDesProduits);
 
-// GET /api/products/:id
-// Retourne le detail d un produit.
-router.get("/:id", async (req, res) => {
-  try {
-    const productId = req.params.id;
-    const product = await Product.findById(productId);
-
-    if (!product) {
-      return res.status(404).json({ message: "Product not found" });
-    }
-
-    return res.json(product);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not load product" });
+  } catch (erreur) {
+    console.error("Erreur technique produits:", erreur);
+    return res.status(500).json({ message: "Impossible de charger le catalogue." });
   }
 });
 
 // ============================================================
-// POST /api/products
-// Action: Creer un nouveau produit.
-// Restriction: Admin uniquement (verifie par checkAuth et checkAdmin).
+// ROUTE : VOIR LE DETAIL D'UN PRODUIT (GET /api/products/:id)
+// ============================================================
+router.get("/:id", async (req, res) => {
+  try {
+    const identifiant = req.params.id;
+    const produitTrouve = await Product.findById(identifiant);
+
+    if (!produitTrouve) {
+      return res.status(404).json({ message: "Produit introuvable." });
+    }
+
+    return res.json(produitTrouve);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Erreur lors du chargement." });
+  }
+});
+
+// ============================================================
+// ROUTE : CREER UN PRODUIT (POST /api/products) - ADMIN
 // ============================================================
 router.post("/", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // 1. On prepare les donnees recues depuis le formulaire.
-    const payload = readProductPayload(req.body);
+    // 1) On prépare les données envoyées par l'admin.
+    const nouvellesDonnees = {
+      title: nettoyerTexte(req.body.title),
+      description: nettoyerTexte(req.body.description),
+      price: Number(req.body.price),
+      imageUrl: nettoyerTexte(req.body.imageUrl),
+      category: nettoyerTexte(req.body.category),
+      stock: Number(req.body.stock || 0),
+      unit: nettoyerTexte(req.body.unit || "pièce"),
+      featured: Boolean(req.body.featured),
+      specs: extraireCaracteristiques(req.body.specs),
+    };
 
-    // 2. On verifie que les champs obligatoires sont la.
-    if (!isProductPayloadValid(payload)) {
-      return res.status(400).json({ message: "Le titre, la description, le prix et la categorie sont obligatoires." });
+    // 2) On vérifie si tout est correct.
+    if (verifierSiProduitEstValide(nouvellesDonnees) === false) {
+      return res.status(400).json({ message: "Veuillez remplir toutes les informations obligatoires." });
     }
 
-    // 3. Sauvegarder dans MongoDB.
-    const product = await Product.create(payload);
+    // 3) On enregistre dans la base.
+    const produitCree = await Product.create(nouvellesDonnees);
 
-    // 4. Succes ! On renvoie le produit cree avec le code 201 (Created).
-    return res.status(201).json(product);
-  } catch (error) {
-    console.error("Erreur creation produit:", error);
-    return res.status(500).json({ message: "Impossible de creer le produit" });
+    return res.status(201).json(produitCree);
+  } catch (erreur) {
+    console.error("Erreur création produit:", erreur);
+    return res.status(500).json({ message: "Échec de la création du produit." });
   }
 });
 
-// PUT /api/products/:id
-// Mettre a jour un produit (admin uniquement).
+// ============================================================
+// ROUTE : MODIFIER UN PRODUIT (PUT /api/products/:id) - ADMIN
+// ============================================================
 router.put("/:id", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // Charger le produit existant.
-    const existingProduct = await Product.findById(req.params.id);
-    if (!existingProduct) {
-      return res.status(404).json({ message: "Product not found" });
-    }
+    const identifiant = req.params.id;
+    
+    // 1) On prépare les modifications.
+    const modifications = {
+      title: nettoyerTexte(req.body.title),
+      description: nettoyerTexte(req.body.description),
+      price: Number(req.body.price),
+      imageUrl: nettoyerTexte(req.body.imageUrl),
+      category: nettoyerTexte(req.body.category),
+      stock: Number(req.body.stock),
+      unit: nettoyerTexte(req.body.unit),
+      featured: Boolean(req.body.featured),
+      specs: extraireCaracteristiques(req.body.specs),
+    };
 
-    // Lire et nettoyer les champs (sans ecraser les valeurs existantes).
-    const payload = readProductUpdatePayload(req.body, existingProduct);
-
-    // Verifier champs obligatoires.
-    if (!isProductPayloadValid(payload)) {
-      return res.status(400).json({ message: "title, description, price, imageUrl and category are required" });
-    }
-
-    // Mettre a jour le produit.
-    const product = await Product.findByIdAndUpdate(req.params.id, payload, {
-      new: true,
-      runValidators: true,
+    // 2) On met à jour le produit.
+    const produitMisAJour = await Product.findByIdAndUpdate(identifiant, modifications, { 
+      new: true,         // Nous renvoie le produit après modif.
+      runValidators: true // Vérifie que les données sont conformes au modèle.
     });
 
-    return res.json(product);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not update product" });
+    if (!produitMisAJour) {
+      return res.status(404).json({ message: "Produit impossible à modifier (introuvable)." });
+    }
+
+    return res.json(produitMisAJour);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Erreur lors de la modification." });
   }
 });
 
-// DELETE /api/products/:id
-// Supprimer un produit (admin uniquement).
+// ============================================================
+// ROUTE : SUPPRIMER UN PRODUIT (DELETE /api/products/:id) - ADMIN
+// ============================================================
 router.delete("/:id", checkAuth, checkAdmin, async (req, res) => {
   try {
-    const deletedProduct = await Product.findByIdAndDelete(req.params.id);
+    const identifiant = req.params.id;
+    const produitSupprime = await Product.findByIdAndDelete(identifiant);
 
-    if (!deletedProduct) {
-      return res.status(404).json({ message: "Product not found" });
+    if (!produitSupprime) {
+      return res.status(404).json({ message: "Produit déjà supprimé ou introuvable." });
     }
 
-    return res.json({ message: "Product deleted" });
-  } catch (error) {
-    return res.status(500).json({ message: "Could not delete product" });
+    return res.json({ message: "Félicitations, le produit a été supprimé." });
+  } catch (erreur) {
+    return res.status(500).json({ message: "Échec de la suppression." });
   }
 });
 

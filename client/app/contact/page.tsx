@@ -4,276 +4,269 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import SiteHeader from "@/components/site-header";
-import { apiRequest } from "@/lib/api";
-import { loadSession } from "@/lib/session";
+import { appelAPI } from "@/lib/api";
+import { chargerSession } from "@/lib/session";
 import type { ContactMessage, Session } from "@/lib/types";
-import { getErrorMessage } from "@/lib/ui";
 
-// Formulaire de demande projet.
-type ContactForm = {
+// --- TYPES SIMPLIFIÉS ---
+
+// Ce que contient le formulaire pour envoyer un message de projet.
+type FormulaireProjet = {
   phone: string;
   subject: string;
   message: string;
 };
 
-// Valeur initiale formulaire.
-const EMPTY_FORM: ContactForm = {
+// Valeurs vides au départ.
+const FORMULAIRE_VIDE: FormulaireProjet = {
   phone: "",
   subject: "",
   message: "",
 };
 
-// Labels lisibles des statuts conversation.
-const MESSAGE_STATUS_LABELS: Record<string, string> = {
-  new: "En attente",
-  replied: "Admin a repondu",
-  // Compatibilite ancienne valeur.
-  read: "En attente",
-};
-
-// Styles badges selon statut conversation.
-const MESSAGE_STATUS_STYLES: Record<string, string> = {
-  new: "border-[#e8c387] bg-[#fff5e6] text-[#a15b00]",
-  replied: "border-[#8bcf9d] bg-[#ebfff0] text-[#176534]",
-  read: "border-[#e8c387] bg-[#fff5e6] text-[#a15b00]",
-};
-
-// Helpers simples.
-const getMessageStatusLabel = (status: string) => MESSAGE_STATUS_LABELS[status] || status;
-const getMessageStatusStyle = (status: string) =>
-  MESSAGE_STATUS_STYLES[status] || "border-[#c9bfb0] bg-[#f7f2ea] text-[#695948]";
-
 export default function ContactPage() {
-  // Session utilisateur connecte.
-  const [session, setSession] = useState<Session | null>(null);
+  // --- VARIABLES D'ÉTAT (STATE) ---
+  const [infosSession, setInfosSession] = useState<Session | null>(null);
+  const [donneesFormulaire, setDonneesFormulaire] = useState<FormulaireProjet>(FORMULAIRE_VIDE);
+  
+  // Liste des demandes envoyées par l'utilisateur.
+  const [mesDemandesEnvoyees, setMesDemandesEnvoyees] = useState<ContactMessage[]>([]);
 
-  // Etat formulaire.
-  const [form, setForm] = useState<ContactForm>(EMPTY_FORM);
+  // États pour l'interface (UI).
+  const [chargementEnCours, setChargementEnCours] = useState(false);
+  const [envoiEnCours, setEnvoiEnCours] = useState(false);
+  const [messageRetour, setMessageRetour] = useState("");
 
-  // Liste des demandes envoyees par cet utilisateur.
-  const [myMessages, setMyMessages] = useState<ContactMessage[]>([]);
-
-  // Etats UI.
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [isSending, setIsSending] = useState(false);
-  const [feedback, setFeedback] = useState("");
-
-  // Charger l historique des demandes du client.
-  const loadMyMessages = async (token: string) => {
-    setIsLoadingMessages(true);
-
+  // --- 1) CHARGER LES MESSAGES DEPUIS LE SERVEUR ---
+  const chargerMesMessages = async (jeton: string) => {
+    setChargementEnCours(true);
     try {
-      const messageList = await apiRequest<ContactMessage[]>("/messages/mine", { token });
-      setMyMessages(messageList);
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Chargement des demandes echoue"));
+      // On demande au serveur tous les messages liés à notre compte.
+      const listeMessages = await appelAPI<ContactMessage[]>("/messages/mine", { 
+        token: jeton 
+      });
+      setMesDemandesEnvoyees(listeMessages);
+    } catch (erreur) {
+      console.error("Erreur chargement messages:", erreur);
     } finally {
-      setIsLoadingMessages(false);
+      setChargementEnCours(false);
     }
   };
 
-  // Au demarrage: si user connecte, on charge son historique.
+  // --- 2) AU DÉMARRAGE DE LA PAGE ---
   useEffect(() => {
-    const savedSession = loadSession();
-
-    if (savedSession?.user.role === "user") {
-      setSession(savedSession);
-      void loadMyMessages(savedSession.token);
+    const sessionActuelle = chargerSession();
+    if (sessionActuelle && sessionActuelle.user.role === "user") {
+      setInfosSession(sessionActuelle);
+      // On charge l'historique tout de suite.
+      chargerMesMessages(sessionActuelle.token);
     }
   }, []);
 
-  // Mettre a jour formulaire demande.
-  const handleInputChange = (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    const { name, value } = event.target;
-    setForm((current) => ({
-      ...current,
-      [name]: value,
-    }));
+  // --- 3) ACTIONS DU FORMULAIRE ---
+
+  // Quand on tape dans un champ (input ou textarea).
+  const gererSaisieChamp = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    setDonneesFormulaire({ 
+      ...donneesFormulaire, 
+      [e.target.name]: e.target.value 
+    });
   };
 
-  // Envoyer une nouvelle demande projet.
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  // Quand on clique sur "Envoyer la demande".
+  const envoyerLaDemande = async (evenement: FormEvent<HTMLFormElement>) => {
+    evenement.preventDefault(); // Bloque le rechargement de page.
 
-    if (!session) {
-      setFeedback("Pour envoyer un message, connectez-vous.");
+    if (!infosSession) {
+      setMessageRetour("Veuillez vous connecter pour envoyer une demande.");
       return;
     }
 
-    setIsSending(true);
-    setFeedback("");
+    setEnvoiEnCours(true);
+    setMessageRetour("");
 
     try {
-      await apiRequest("/messages", {
+      // Appel API pour enregistrer le message.
+      await appelAPI("/messages", {
         method: "POST",
-        token: session.token,
-        body: form,
+        token: infosSession.token,
+        body: donneesFormulaire,
       });
 
-      // Reinitialiser le formulaire.
-      setForm(EMPTY_FORM);
-      setFeedback("Message envoye avec succes.");
+      // Si ça marche :
+      setDonneesFormulaire(FORMULAIRE_VIDE); // Vider le formulaire.
+      setMessageRetour("✅ Votre demande a été envoyée avec succès.");
+      
+      // Actualiser la liste en bas de page.
+      chargerMesMessages(infosSession.token);
 
-      // Recharger historique client.
-      await loadMyMessages(session.token);
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Envoi echoue"));
+    } catch (erreur: any) {
+      setMessageRetour(erreur.message || "L'envoi a échoué.");
     } finally {
-      setIsSending(false);
+      setEnvoiEnCours(false);
     }
   };
 
-  // Supprimer une conversation du client.
-  const deleteMyMessage = async (messageId: string) => {
-    if (!session) {
-      return;
-    }
-
-    if (!window.confirm("Supprimer cette conversation ?")) {
-      return;
-    }
+  // Supprimer une de ses propres demandes.
+  const supprimerMaDemande = async (idMessage: string) => {
+    if (!infosSession) return;
+    if (!confirm("Voulez-vous vraiment supprimer cette demande ?")) return;
 
     try {
-      await apiRequest<{ message: string }>(`/messages/${messageId}`, {
+      await appelAPI(`/messages/${idMessage}`, {
         method: "DELETE",
-        token: session.token,
+        token: infosSession.token,
       });
-
-      await loadMyMessages(session.token);
-      setFeedback("Demande supprimee.");
-    } catch (error) {
-      setFeedback(getErrorMessage(error, "Suppression echouee"));
+      // On recharge la liste après suppression.
+      chargerMesMessages(infosSession.token);
+      setMessageRetour("🗑️ Demande supprimée.");
+    } catch (erreur: any) {
+      setMessageRetour("Erreur lors de la suppression.");
     }
   };
 
   return (
     <>
       <SiteHeader />
-      <main className="shell space-y-4 py-6">
-        {/* Hero simple */}
-        <section className="panel hero-card p-6 md:p-8">
-          <p className="chip inline-flex border-white/30 bg-white/10 text-white">Demande de projet</p>
-          <h1 className="mt-4 font-display text-4xl font-bold text-white">Construction & Realisation</h1>
-          <p className="mt-3 text-sm text-white/85">
-            Vous voulez construire une maison, une villa ou un autre projet ? Envoyez votre demande ici.
-          </p>
+      
+      <main className="shell py-10 space-y-10">
+        
+        {/* SECTION 1 : PRÉSENTATION */}
+        <section className="panel bg-[#1e293b] text-white p-8 rounded-3xl">
+          <div className="max-w-2xl space-y-4">
+            <h1 className="font-display text-5xl font-bold text-white">Contactez-nous</h1>
+            <p className="text-lg text-slate-300">
+              Vous avez un projet de construction ou de rénovation ? 
+              Remplissez le formulaire et notre équipe vous répondra rapidement.
+            </p>
+          </div>
         </section>
 
-        {/* Formulaire + guide simple */}
-        <section className="panel p-6 md:p-8">
-          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <div className="rounded-2xl border border-[#d9cfbf] bg-white p-4 md:p-5">
-              <p className="text-xs uppercase tracking-[0.14em] text-[#7f725e]">Formulaire projet</p>
+        <div className="grid lg:grid-cols-2 gap-10">
+          
+          {/* SECTION 2 : FORMULAIRE DE CONTACT */}
+          <section className="panel bg-white p-8 rounded-2xl border border-slate-200 space-y-6">
+            <h2 className="font-display text-3xl font-bold text-slate-900 border-b pb-4">
+              Nouvelle Demande
+            </h2>
 
-              {!session ? (
-                <div className="mt-3 space-y-3 text-sm">
-                  <p className="text-[#5d5448]">Vous devez avoir un compte pour envoyer une demande de projet.</p>
-                  <div className="flex gap-2">
-                    <Link href="/auth/login" className="btn btn-ghost text-sm">
-                      Connexion
-                    </Link>
-                    <Link href="/auth/register" className="btn btn-primary text-sm">
-                      Inscription
-                    </Link>
-                  </div>
-                </div>
-              ) : (
-                <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
-                  <div className="rounded-xl border border-[#e4dacb] bg-[#f9f4ea] p-3">
-                    <p className="text-xs uppercase tracking-[0.12em] text-[#7f725e]">Client connecte</p>
-                    <p className="font-semibold text-[#1f2937]">{session.user.name}</p>
-                    <p className="text-sm text-[#5d5448]">{session.user.email}</p>
-                  </div>
-
-                  <input name="phone" placeholder="Telephone" value={form.phone} onChange={handleInputChange} />
-                  <input
-                    name="subject"
-                    placeholder="Type de projet (Maison, Villa, Immeuble...)"
-                    value={form.subject}
-                    onChange={handleInputChange}
-                    required
-                  />
-                  <textarea
-                    name="message"
-                    rows={5}
-                    placeholder="Decrivez votre projet: ville, superficie, style, budget approximatif, delai..."
-                    value={form.message}
-                    onChange={handleInputChange}
-                    required
-                  />
-
-                  <button className="btn btn-primary w-full" type="submit" disabled={isSending}>
-                    {isSending ? "Envoi..." : "Envoyer la demande"}
-                  </button>
-                </form>
-              )}
-            </div>
-
-            <aside className="rounded-2xl border border-[#d9cfbf] bg-[#fbf7ef] p-4 md:p-5">
-              <p className="text-xs uppercase tracking-[0.14em] text-[#7f725e]">Comment ca marche</p>
-              <div className="mt-3 space-y-3 text-sm text-[#4f463a]">
-                <div className="rounded-xl border border-[#e4dacb] bg-white p-3">
-                  <p className="font-semibold text-[#1f2937]">1. Envoyer votre besoin</p>
-                  <p className="mt-1">Precisez le type de projet, la zone, et les details techniques.</p>
-                </div>
-                <div className="rounded-xl border border-[#e4dacb] bg-white p-3">
-                  <p className="font-semibold text-[#1f2937]">2. Analyse par l equipe</p>
-                  <p className="mt-1">Notre equipe etudie votre demande et prepare une reponse adaptee.</p>
-                </div>
-                <div className="rounded-xl border border-[#e4dacb] bg-white p-3">
-                  <p className="font-semibold text-[#1f2937]">3. Reponse admin</p>
-                  <p className="mt-1">Vous recevez le retour directement dans la section de suivi ci-dessous.</p>
+            {!infosSession ? (
+              <div className="bg-orange-50 p-6 rounded-xl border border-orange-200 text-center space-y-4">
+                <p className="font-bold text-orange-800">
+                  Connectez-vous pour nous envoyer un message sécurisé.
+                </p>
+                <div className="flex justify-center gap-4">
+                  <Link href="/auth/login" className="btn btn-primary px-8">Connexion</Link>
+                  <Link href="/auth/register" className="btn btn-ghost border-slate-300">S'Inscrire</Link>
                 </div>
               </div>
-            </aside>
-          </div>
-
-          {/* Feedback principal */}
-          {feedback ? <p className="mt-4 rounded-xl bg-[#fff4e5] p-3 text-sm text-[#c46a00]">{feedback}</p> : null}
-        </section>
-
-        {/* Historique demandes du client */}
-        {session ? (
-          <section className="panel space-y-4 p-6 md:p-8">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="font-display text-2xl font-bold">Suivi de mes demandes</h2>
-              <span className="chip">{myMessages.length} demandes</span>
-            </div>
-
-            {isLoadingMessages ? (
-              <p className="text-sm text-[#5d5448]">Chargement...</p>
-            ) : myMessages.length === 0 ? (
-              <p className="text-sm text-[#5d5448]">Aucune demande envoyee pour le moment.</p>
             ) : (
-              <div className="space-y-3">
-                {myMessages.map((message) => (
-                  <article key={message._id} className="rounded-xl border border-[#d7cebf] bg-white p-4 shadow-[0_8px_18px_rgba(62,47,30,0.07)]">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-sm font-semibold text-[#1f2937]">{message.subject || "Demande de projet"}</p>
+              <form onSubmit={envoyerLaDemande} className="space-y-4">
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-sm font-bold text-slate-700">Votre Téléphone</label>
+                    <input 
+                      name="phone" 
+                      placeholder="Ex: 06 12 34 56 78" 
+                      value={donneesFormulaire.phone} 
+                      onChange={gererSaisieChamp} 
+                      required 
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-bold text-slate-700">Objet de la demande</label>
+                    <input 
+                      name="subject" 
+                      placeholder="Ex: Construction Villa" 
+                      value={donneesFormulaire.subject} 
+                      onChange={gererSaisieChamp} 
+                      required 
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-sm font-bold text-slate-700">Détails de votre projet</label>
+                  <textarea 
+                    name="message" 
+                    placeholder="Décrivez votre besoin (lieu, surface, budget...)" 
+                    rows={6} 
+                    value={donneesFormulaire.message} 
+                    onChange={gererSaisieChamp} 
+                    required 
+                  />
+                </div>
+
+                <button 
+                  type="submit" 
+                  className="btn btn-primary w-full py-4 text-lg font-bold"
+                  disabled={envoiEnCours}
+                >
+                  {envoiEnCours ? "Envoi en cours..." : "🚀 Envoyer mon Message"}
+                </button>
+              </form>
+            )}
+
+            {messageRetour && (
+              <p className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center text-sm font-bold text-slate-600">
+                {messageRetour}
+              </p>
+            )}
+          </section>
+
+          {/* SECTION 3 : HISTORIQUE ET SUIVI */}
+          <section className="space-y-6">
+            <h2 className="font-display text-3xl font-bold text-slate-900">
+              Mes Demandes en Cours
+            </h2>
+
+            {!infosSession ? (
+              <p className="text-slate-500 italic">Connectez-vous pour voir vos messages.</p>
+            ) : chargementEnCours ? (
+              <p className="text-slate-500">Chargement de vos demandes...</p>
+            ) : mesDemandesEnvoyees.length === 0 ? (
+              <p className="text-slate-500 bg-slate-100 p-8 rounded-2xl text-center italic">
+                Vous n'avez pas encore envoyé de demande.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                {mesDemandesEnvoyees.map((m) => (
+                  <article key={m._id} className="panel bg-[#f8fafc] p-6 rounded-2xl border border-slate-200">
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className="font-bold text-lg text-slate-900">{m.subject}</h3>
+                        <p className="text-xs text-slate-400">{new Date(m.createdAt).toLocaleDateString()}</p>
+                      </div>
                       <div className="flex items-center gap-2">
-                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${getMessageStatusStyle(message.status)}`}>
-                          {getMessageStatusLabel(message.status)}
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${m.status === 'replied' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                          {m.status === 'replied' ? '✅ Répondu' : '⏳ Attente'}
                         </span>
-                        <button className="btn btn-ghost text-sm" type="button" onClick={() => deleteMyMessage(message._id)}>
-                          Supprimer
+                        <button 
+                          onClick={() => supprimerMaDemande(m._id)}
+                          className="text-slate-300 hover:text-red-500 transition-colors"
+                        >
+                          ✕
                         </button>
                       </div>
                     </div>
+                    
+                    <p className="text-sm text-slate-600 italic bg-white p-4 rounded-xl border border-slate-100 mb-4">
+                      "{m.message}"
+                    </p>
 
-                    <p className="mt-2 text-sm text-[#4c4338]">{message.message}</p>
-
-                    {message.adminReply ? (
-                      <div className="mt-3 rounded-xl border border-[#d9cdb9] bg-[#f9f4ea] p-3">
-                        <p className="text-xs uppercase tracking-[0.12em] text-[#7c6e5a]">Reponse admin</p>
-                        <p className="mt-1 text-sm text-[#3f372c]">{message.adminReply}</p>
+                    {m.adminReply && (
+                      <div className="bg-white p-4 rounded-xl border-l-4 border-l-green-500 shadow-sm space-y-1">
+                        <p className="text-xs font-bold text-green-600 uppercase">Réponse de FIKHI CONSTRUCTION :</p>
+                        <p className="text-sm text-slate-800 font-medium">{m.adminReply}</p>
                       </div>
-                    ) : null}
+                    )}
                   </article>
                 ))}
               </div>
             )}
           </section>
-        ) : null}
+        </div>
+
       </main>
     </>
   );

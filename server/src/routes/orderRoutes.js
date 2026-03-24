@@ -8,173 +8,174 @@ const { ORDER_STATUSES } = require("../constants/orderStatus");
 
 const router = express.Router();
 
-// Nettoyer une valeur texte.
-const cleanText = (value) => String(value || "").trim();
+// --- FONCTIONS D'AIDE (HELPERS) ---
 
-// Verifier une quantite d item.
-const isValidQuantity = (value) => Number.isInteger(value) && value > 0;
-
-// Statuts que l admin peut choisir (sans "in_progress" qui est automatique au debut).
-const ADMIN_ORDER_STATUSES = ORDER_STATUSES.slice(1);
-
-// Calculer total global de commande.
-const calculateTotalAmount = (orderItems) => {
-  let totalAmount = 0;
-  for (const item of orderItems) {
-    totalAmount += item.lineTotal;
-  }
-  return totalAmount;
+// 1) Nettoyer un texte.
+const nettoyerTexte = (valeur) => {
+  return String(valeur || "").trim();
 };
+
+// 2) Vérifier si un nombre est une quantité valide (Entier > 0).
+const verifierSiQuantiteValide = (valeur) => {
+  const nombre = Number(valeur);
+  return Number.isInteger(nombre) && nombre > 0;
+};
+
+// 3) Calculer le montant total d'une commande.
+const calculerMontantTotal = (listeArticles) => {
+  let total = 0;
+  for (const article of listeArticles) {
+    total = total + article.lineTotal;
+  }
+  return total;
+};
+
+// --- ROUTES ---
 
 // ============================================================
 // ROUTE : CREER UNE COMMANDE (POST /api/orders)
-// Action : Enregistre les produits du panier dans la base.
+// Action : Valide le panier, calcule le prix et crée la commande.
 // ============================================================
 router.post("/", checkAuth, async (req, res) => {
   try {
     // 1) On récupère les infos envoyées par le client.
-    const items = req.body.items;
-    const fullName = cleanText(req.body.fullName);
-    const phone = cleanText(req.body.phone);
-    const city = cleanText(req.body.city);
-    const address = cleanText(req.body.address);
-    const notes = cleanText(req.body.notes);
+    const articlesDuPanier = req.body.items;
+    const nomComplet = nettoyerTexte(req.body.fullName);
+    const telephone = nettoyerTexte(req.body.phone);
+    const ville = nettoyerTexte(req.body.city);
+    const adresse = nettoyerTexte(req.body.address);
+    const codesPostauxOuNotes = nettoyerTexte(req.body.notes);
 
-    // 2) Vérification de sécurité de base.
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "Le panier est vide." });
+    // 2) Vérifications de base (Est-ce que tout est rempli ?).
+    if (!Array.isArray(articlesDuPanier) || articlesDuPanier.length === 0) {
+      return res.status(400).json({ message: "Votre panier est vide." });
     }
 
-    if (!fullName || !phone || !city || !address) {
-      return res.status(400).json({ message: "Toutes les coordonnées de livraison sont requises." });
+    if (!nomComplet || !telephone || !ville || !adresse) {
+      return res.status(400).json({ message: "Merci de remplir vos coordonnées de livraison." });
     }
 
-    // 3) On vérifie que chaque produit existe et qu'il y a du stock.
-    const validItems = [];
-    for (const item of items) {
-      const productId = cleanText(item.productId);
-      const quantity = Number(item.quantity || 1);
-      if (mongoose.Types.ObjectId.isValid(productId) && isValidQuantity(quantity)) {
-        validItems.push({ productId, quantity });
-      }
-    }
+    // 3) Préparation de la liste finale des articles.
+    const articlesFinalises = [];
 
-    // 4) On charge les produits depuis la base de données.
-    const productIds = validItems.map(i => i.productId);
-    const products = await Product.find({ _id: { $in: productIds } });
-    const productById = new Map(products.map((p) => [String(p._id), p]));
+    // On boucle sur chaque article envoyé par le frontend.
+    for (const item of articlesDuPanier) {
+      const idProduit = nettoyerTexte(item.productId);
+      const quantiteVoulue = Number(item.quantity || 1);
 
-    // 5) On construit la liste finale des produits commandés (avec prix à l'instant T).
-    const orderItems = [];
-    for (const item of validItems) {
-      const product = productById.get(item.productId);
-      if (!product) continue;
-
-      if (product.stock < item.quantity) {
-        return res.status(400).json({ message: `Stock insuffisant pour : ${product.title}` });
+      // On vérifie si l'ID est valide et si la quantité est correcte.
+      if (!mongoose.Types.ObjectId.isValid(idProduit) || !verifierSiQuantiteValide(quantiteVoulue)) {
+        continue; // On passe à l'article suivant si celui-ci est invalide.
       }
 
-      const lineTotal = product.price * item.quantity;
-      orderItems.push({
-        product: product._id,
-        title: product.title,
-        imageUrl: product.imageUrl,
-        price: product.price,
-        quantity: item.quantity,
-        lineTotal,
+      // On cherche le produit en base de données pour avoir son VRAI prix.
+      const produitEnBase = await Product.findById(idProduit);
+
+      if (!produitEnBase) {
+        return res.status(404).json({ message: `Le produit ${idProduit} n'existe plus.` });
+      }
+
+      // On vérifie si on a assez de stock.
+      if (produitEnBase.stock < quantiteVoulue) {
+        return res.status(400).json({ message: `Désolé, plus assez de stock pour : ${produitEnBase.title}` });
+      }
+
+      // On calcule le prix pour cette ligne (Prix x Quantité).
+      const totalLigne = produitEnBase.price * quantiteVoulue;
+
+      // On ajoute cet article à notre liste finale.
+      articlesFinalises.push({
+        product: produitEnBase._id,
+        title: produitEnBase.title,
+        imageUrl: produitEnBase.imageUrl,
+        price: produitEnBase.price,
+        quantity: quantiteVoulue,
+        lineTotal: totalLigne
       });
     }
 
-    // 6) On enregistre la commande finale.
-    const order = await Order.create({
+    // 4) On calcule le montant global de la commande.
+    const prixTotalCommande = calculerMontantTotal(articlesFinalises);
+
+    // 5) On enregistre la commande dans la base de données.
+    const nouvelleCommande = await Order.create({
       user: req.user.id,
-      items: orderItems,
-      totalAmount: calculateTotalAmount(orderItems),
-      fullName,
-      phone,
-      city,
-      address,
-      notes,
+      items: articlesFinalises,
+      totalAmount: prixTotalCommande,
+      fullName: nomComplet,
+      phone: telephone,
+      city: ville,
+      address: adresse,
+      notes: codesPostauxOuNotes
     });
 
-    // 7) Mise à jour du stock : On diminue les quantités vendues.
-    const stockUpdates = orderItems.map((item) => ({
-      updateOne: {
-        filter: { _id: item.product },
-        update: { $inc: { stock: -item.quantity } },
-      },
-    }));
-    if (stockUpdates.length > 0) {
-      await Product.bulkWrite(stockUpdates);
+    // 6) MISE À JOUR DU STOCK : On retire ce qu'on a vendu.
+    for (const articleVendu of articlesFinalises) {
+      await Product.findByIdAndUpdate(articleVendu.product, {
+        $inc: { stock: -articleVendu.quantity }
+      });
     }
 
-    return res.status(201).json(order);
-  } catch (error) {
-    console.error("Erreur commande:", error);
-    return res.status(500).json({ message: "Impossible de créer la commande." });
+    // 7) Succès !
+    return res.status(201).json(nouvelleCommande);
+
+  } catch (erreurTechnique) {
+    console.error("Erreur commande:", erreurTechnique);
+    return res.status(500).json({ message: "Erreur lors de la création de votre commande." });
   }
 });
 
-// GET /api/orders/mine
-// Retourner les commandes du client connecte.
+// ============================================================
+// ROUTE : VOIR MES COMMANDES (GET /api/orders/mine)
+// ============================================================
 router.get("/mine", checkAuth, async (req, res) => {
   try {
-    const orders = await Order.find({ user: req.user.id }).sort({ createdAt: -1 });
-    return res.json(orders);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not load your orders" });
+    // On cherche les commandes qui appartiennent à l'utilisateur connecté.
+    const mesCommandes = await Order.find({ user: req.user.id }).sort({ createdAt: -1 });
+    return res.json(mesCommandes);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Impossible de charger vos commandes." });
   }
 });
 
-// GET /api/orders
-// Retourner toutes les commandes (admin).
-router.get("/", checkAuth, checkAdmin, async (_req, res) => {
+// ============================================================
+// ROUTE : VOIR TOUTES LES COMMANDES (GET /api/orders) - ADMIN
+// ============================================================
+router.get("/", checkAuth, checkAdmin, async (req, res) => {
   try {
-    const orders = await Order.find().populate("user", "name email").sort({ createdAt: -1 });
-    return res.json(orders);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not load orders" });
+    // On récupère tout, et on ajoute les infos de l'utilisateur (nom, email).
+    const toutesLesCommandes = await Order.find()
+      .populate("user", "name email")
+      .sort({ createdAt: -1 });
+    
+    return res.json(toutesLesCommandes);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Erreur lors du chargement des commandes admin." });
   }
 });
 
-// PATCH /api/orders/:id/status
-// Changer le statut d une commande (admin).
+// ============================================================
+// ROUTE : CHANGER LE STATUT (PATCH /api/orders/:id/status) - ADMIN
+// ============================================================
 router.patch("/:id/status", checkAuth, checkAdmin, async (req, res) => {
   try {
-    // 1) Lire le statut choisi par admin.
-    const status = req.body.status;
+    const identifiant = req.params.id;
+    const nouveauStatut = req.body.status;
 
-    // 2) Verifier que le statut est autorise.
-    if (!ADMIN_ORDER_STATUSES.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
+    // On met à jour le statut uniquement.
+    const commandeModifiee = await Order.findByIdAndUpdate(
+      identifiant, 
+      { status: nouveauStatut }, 
+      { new: true }
+    );
+
+    if (!commandeModifiee) {
+      return res.status(404).json({ message: "Commande introuvable." });
     }
 
-    // 3) Mettre a jour la commande.
-    const order = await Order.findByIdAndUpdate(req.params.id, { status }, { new: true, runValidators: true });
-
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    return res.json(order);
-  } catch (error) {
-    return res.status(500).json({ message: "Could not update order status" });
-  }
-});
-
-// DELETE /api/orders/:id
-// Supprimer une commande (admin).
-router.delete("/:id", checkAuth, checkAdmin, async (req, res) => {
-  try {
-    const order = await Order.findByIdAndDelete(req.params.id);
-
-    if (!order) {
-      return res.status(404).json({ message: "Order not found" });
-    }
-
-    return res.json({ message: "Order deleted" });
-  } catch (error) {
-    return res.status(500).json({ message: "Could not delete order" });
+    return res.json(commandeModifiee);
+  } catch (erreur) {
+    return res.status(500).json({ message: "Échec du changement de statut." });
   }
 });
 
