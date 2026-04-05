@@ -24,6 +24,9 @@
   --color-fg: var(--foreground);
   --font-sans: var(--font-manrope);
   --font-display: var(--font-syne);
+  --color-hero: var(--hero);
+  --color-accent: var(--accent);
+  --color-primary: var(--primary);
 }
 
 body {
