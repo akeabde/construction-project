@@ -1,5 +1,13 @@
 @import "tailwindcss";
-@source "../**/*.{ts,tsx}";
+@source "../app/products/page.tsx";
+@source "../app/contact/page.tsx";
+@source "../app/auth/login/page.tsx";
+@source "../app/auth/register/page.tsx";
+@source "../app/dashboard/user/page.tsx";
+@source "../app/dashboard/admin/page.tsx";
+@source "../app/page.tsx";
+@source "../app/layout.tsx";
+@source "../components/site-header.tsx";
 :root {
   --background: #f8f4ec;
   --foreground: #0f172a;
